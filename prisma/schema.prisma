@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Paper {
+  PAPER_1
+  PAPER_2
+}
+
+enum AttemptStatus {
+  READY
+  IN_PROGRESS
+  LOCKED
+  SUBMITTED
+  GRADED
+}
+
+model Exam {
+  id                    String            @id @default(cuid())
+  title                 String
+  subject               String
+  accessCode            String            @unique
+  startTime             DateTime
+  endTime               DateTime
+  durationMinutes       Int
+  lookAwayWarningSecs   Int               @default(3)
+  lockoutThresholdSecs  Int               @default(7)
+  maxWarnings           Int               @default(3)
+  maxRetries            Int               @default(2)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  questions             Question[]
+  attempts              StudentAttempt[]
+}
+
+model Question {
+  id               String   @id @default(cuid())
+  examId           String
+  exam             Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  paper            Paper
+  order             Int
+  parentId          String?
+  parent            Question? @relation("QuestionParts", fields: [parentId], references: [id], onDelete: Cascade)
+  parts             Question[] @relation("QuestionParts")
+  stem              String
+  marks             Int?
+  options           Json?
+  correctOptionId   String?
+  expectedAnswer    String?
+  rubric            Json?
+  createdAt         DateTime @default(now())
+
+  @@index([examId, paper, order])
+}
+
+model StudentAttempt {
+  id                 String          @id @default(cuid())
+  examId             String
+  exam               Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
+  candidateName      String?
+  candidateNumber    String?
+  status             AttemptStatus   @default(READY)
+  chancesLeft        Int
+  reshuffleCount     Int             @default(0)
+  reshuffleSeed      String?
+  startedAt          DateTime?
+  submittedAt        DateTime?
+  objectiveScore     Float?
+  theoryScore        Float?
+  totalScore         Float?
+  answers            Json?
+  gradingReport      Json?
+  violations         ViolationLog[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([examId, status])
+}
+
+model ViolationLog {
+  id               String         @id @default(cuid())
+  attemptId        String
+  attempt          StudentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  eventType        String
+  details          Json?
+  durationMs       Int?
+  occurredAt       DateTime       @default(now())
+
+  @@index([attemptId, occurredAt])
+}

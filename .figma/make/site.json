@@ -1,0 +1,10 @@
+{
+  "description": "A WASSCE teacher dashboard for scheduling secure exams, managing anti-cheat controls, and converting raw questions into structured papers with AI-generated model answers.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
