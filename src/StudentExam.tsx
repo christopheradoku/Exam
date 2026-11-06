@@ -401,7 +401,15 @@ export default function StudentExam({ examId }: { examId: string }) {
     }
     const onPageHide = () => autoSubmit("The exam page was left")
     const onBeforeUnload = () => autoSubmit("The exam page was closed or refreshed")
-    const onWindowBlur = () => autoSubmit("The exam window lost focus")
+    // Browsers can fire blur during ordinary mobile UI transitions. Only submit
+    // for a blur if the page actually becomes hidden; visibilitychange handles
+    // that case too, while this delay avoids false submissions on focus changes.
+    const onWindowBlur = () => {
+      window.setTimeout(() => {
+        if (document.visibilityState === "hidden")
+          autoSubmit("The exam tab was left or hidden")
+      }, 250)
+    }
     const preventClipboardAction = (event: Event) => event.preventDefault()
     const preventClipboardShortcut = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
@@ -1389,7 +1397,9 @@ export default function StudentExam({ examId }: { examId: string }) {
                 type="button"
                 className="primary-button"
                 disabled={busy}
-                onClick={() => {
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
                   setError("")
                   setScreen("paper2")
                   window.scrollTo(0, 0)
