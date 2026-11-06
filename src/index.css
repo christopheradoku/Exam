@@ -338,6 +338,12 @@
 .student-create-panel>.primary-button{margin-left:16px}
 .student-form-help{display:block;margin:8px 16px 0;color:#909bad;font-size:8px}
 .student-create-panel>.student-no-exams{margin:3px 16px 0}
+.exam-class-targeting{display:grid;gap:10px;margin:16px 0;padding:14px;border:1px solid #e8edf3;border-radius:8px;background:#fbfcfe}
+.exam-class-targeting>div:first-child strong{color:#42536b;font-size:10px}
+.exam-class-targeting>div:first-child p{margin:4px 0 0;color:#8793a5;font-size:9px;line-height:1.5}
+.exam-class-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.exam-class-options label{display:flex;align-items:center;gap:7px;min-width:0;padding:9px;border:1px solid #e5eaf1;border-radius:6px;color:#52647d;background:#fff;font-size:9px}
+.exam-class-options input{margin:0;accent-color:#316bc6}
 .student-edit-details{margin-top:10px;padding-top:9px;border-top:1px solid #edf0f4}
 .student-edit-details summary{color:#52647d;font-size:9px;font-weight:700;cursor:pointer;list-style:none}
 .student-edit-details summary::-webkit-details-marker{display:none}
@@ -353,4 +359,5 @@
   .student-list-heading{align-items:flex-start;flex-direction:column;padding:14px}.student-list-tabs{width:100%}.student-list-tabs button{flex:1}.student-exam-card{align-items:flex-start;flex-direction:column;gap:10px;padding:12px}.student-exam-card-action{width:100%}.student-exam-card-action .primary-button{width:100%}
   .student-allocation-controls{grid-template-columns:1fr;padding:0 14px 14px}.student-admin-main{flex-wrap:wrap}.student-admin-main>.status{margin-left:44px}.student-admin-actions{justify-content:flex-start;flex-wrap:wrap}.student-assignment-options{grid-template-columns:1fr}.student-temp-password{align-items:flex-start;flex-direction:column}
   .student-management-grid{grid-template-columns:1fr}.student-add-fields{grid-template-columns:1fr}.student-create-row{grid-template-columns:1fr}.student-create-panel>.primary-button{margin:0 16px}.student-edit-form{grid-template-columns:1fr}.student-edit-form button{grid-column:auto}.student-class-list{margin-right:12px;margin-left:12px}
+  .exam-class-options{grid-template-columns:repeat(2,minmax(0,1fr))}
 }

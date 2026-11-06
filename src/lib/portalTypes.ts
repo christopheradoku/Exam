@@ -49,6 +49,8 @@ export type PortalExam = {
   maxRetries: number
   maxAttempts: number
   gradeBands: GradeBand[]
+  /** Classes whose current and future students may take this exam. */
+  assignedClassIds?: string[]
   photoUploadWindowMinutes?: number
   photoUploadWindows?: Record<string, { openedAt: string; closesAt: string }>
   candidateStartTimes?: Record<string, { startedAt: string; deadlineAt: string }>

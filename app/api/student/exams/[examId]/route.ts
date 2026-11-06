@@ -78,7 +78,7 @@ export async function POST(
   const exam = await getExam(examId)
   if (!exam)
     return NextResponse.json({ error: "Exam not found." }, { status: 404 })
-  if (!student.assignedExamIds.includes(examId))
+  if (!student.assignedExamIds.includes(examId) && !exam.assignedClassIds?.includes(student.classId))
     return NextResponse.json({ error: "This examination has not been assigned to your account." }, { status: 403 })
   const belongsToStudent = (attempt: ExamAttempt) =>
     attempt.studentId === student.id ||

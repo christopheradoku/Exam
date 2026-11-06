@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
 import { isTeacherRequest } from "../../../server/auth"
 import { getStudentStore, updateStudentStore } from "../../../server/studentStore"
+import { listExams } from "../../../server/examStore"
 
 export async function GET(request: NextRequest) {
   if (!isTeacherRequest(request))
@@ -35,6 +36,8 @@ export async function POST(request: NextRequest) {
   if (body?.action === "delete") {
     if (!body.id) return NextResponse.json({ error: "Choose a class to delete." }, { status: 400 })
     try {
+      if ((await listExams()).some((exam) => exam.assignedClassIds?.includes(body.id!)))
+        throw new Error("Remove this class from its assigned examinations before deleting it.")
       await updateStudentStore((store) => {
         if (store.students.some((student) => student.classId === body.id))
           throw new Error("Move or delete the students in this class before deleting it.")

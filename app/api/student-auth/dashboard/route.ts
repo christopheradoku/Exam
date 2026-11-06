@@ -78,7 +78,11 @@ export async function GET(request: NextRequest) {
   if (!student) return NextResponse.json({ error: "Sign in to view your exams." }, { status: 401, headers: { "Cache-Control": "private, no-store" } })
   const assignedIds = new Set(student.assignedExamIds)
   const exams = (await listExams())
-    .filter((exam) => assignedIds.has(exam.id))
+    .filter((exam) =>
+      assignedIds.has(exam.id) ||
+      exam.assignedClassIds?.includes(student.classId) ||
+      exam.attempts.some((attempt) => belongsToStudent(attempt, student.id, student.studentNumber, student.waecCandidateNumber)),
+    )
     .map((exam) => examAssignment(exam, student))
     .sort((left, right) => Date.parse(left.startTime) - Date.parse(right.startTime))
   return NextResponse.json({ student, exams }, { headers: { "Cache-Control": "private, no-store" } })

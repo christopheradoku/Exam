@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isTeacherRequest } from "../../../../server/auth"
 import { getExam, listExams, replaceExams, saveExam } from "../../../../server/examStore"
+import { getStudentStore } from "../../../../server/studentStore"
 import type { PortalExam } from "../../../../src/lib/portalTypes"
 
 export async function GET(request: NextRequest, context: { params: Promise<{ examId: string }> }) {
@@ -34,9 +35,16 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ exa
   if (!changes.title?.trim() || !changes.subject?.trim() || !changes.startTime || !changes.endTime || !changes.questions) {
     return NextResponse.json({ error: "Complete the required exam details." }, { status: 400 })
   }
+  const classIds = Array.isArray(changes.assignedClassIds)
+    ? [...new Set(changes.assignedClassIds.filter((id) => typeof id === "string"))]
+    : existing.assignedClassIds || []
+  const { classes } = await getStudentStore()
+  if (classIds.some((id) => !classes.some((studentClass) => studentClass.id === id)))
+    return NextResponse.json({ error: "One of the selected classes no longer exists. Refresh the page and try again." }, { status: 400 })
   const updated: PortalExam = {
     ...existing,
     ...changes,
+    assignedClassIds: classIds,
     id: existing.id,
     accessCode: existing.accessCode,
     attempts: existing.attempts,

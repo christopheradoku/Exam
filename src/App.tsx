@@ -289,7 +289,9 @@ export default function App() {
     setShowCreate(false)
     setView("exams")
     setDetailsExam(createdExam)
-    setToast("Exam created. Assign it to approved students in the Students panel.")
+    setToast(createdExam.assignedClassIds?.length
+      ? `Exam created and assigned to ${createdExam.assignedClassIds.length} class${createdExam.assignedClassIds.length === 1 ? "" : "es"}.`
+      : "Exam created. Assign it to classes or individual students from the Students panel.")
   }
 
   async function saveEditedExam(exam: PortalExam) {
@@ -303,7 +305,10 @@ export default function App() {
     await loadExams()
     setEditExam(null)
     setDetailsExam(body.exam as PortalExam)
-    setToast("Exam updated successfully.")
+    const updatedExam = body.exam as PortalExam
+    setToast(updatedExam.assignedClassIds?.length
+      ? `Exam updated and assigned to ${updatedExam.assignedClassIds.length} class${updatedExam.assignedClassIds.length === 1 ? "" : "es"}.`
+      : "Exam updated successfully.")
   }
 
   if (authenticated === null)
@@ -1362,7 +1367,12 @@ function StudentsPage({
         </section>
       ) : (
         <section className="student-admin-list">
-          {students.map((student) => (
+          {students.map((student) => {
+            const classAssignedExamIds = exams
+              .filter((exam) => exam.assignedClassIds?.includes(student.classId))
+              .map((exam) => exam.id)
+            const assignedCount = new Set([...student.assignedExamIds, ...classAssignedExamIds]).size
+            return (
             <article className="panel student-admin-card" key={student.id}>
               <div className="student-admin-main">
                 <span className="student-admin-avatar">{initials(student.fullName)}</span>
@@ -1400,26 +1410,28 @@ function StudentsPage({
               <div className="student-admin-danger"><button className="text-button danger-text" disabled={busy} onClick={() => deleteStudent(student)}>Delete student and records</button></div>
               {student.status === "active" && (
                 <details className="student-assignment-details">
-                  <summary>Assigned examinations <span>{student.assignedExamIds.length}</span></summary>
+                  <summary>Assigned examinations <span>{assignedCount}</span></summary>
                   {exams.length ? (
                     <div className="student-assignment-options">
-                      {exams.map((exam) => (
-                        <label key={exam.id}>
+                      {exams.map((exam) => {
+                        const assignedByClass = exam.assignedClassIds?.includes(student.classId) || false
+                        return <label key={exam.id}>
                           <input
                             type="checkbox"
-                            checked={student.assignedExamIds.includes(exam.id)}
-                            disabled={busy}
+                            checked={student.assignedExamIds.includes(exam.id) || assignedByClass}
+                            disabled={busy || assignedByClass}
                             onChange={(event) => void updateStudent({ action: "assign", studentId: student.id, examId: exam.id, assigned: event.target.checked })}
                           />
-                          <span><strong>{exam.title}</strong><small>{exam.subject} · {new Date(exam.startTime).toLocaleString()}</small></span>
+                          <span><strong>{exam.title}</strong><small>{exam.subject} · {assignedByClass ? `Assigned to ${student.className}` : new Date(exam.startTime).toLocaleString()}</small></span>
                         </label>
-                      ))}
+                      })}
                     </div>
                   ) : <p className="student-no-exams">Create an examination before assigning one.</p>}
                 </details>
               )}
             </article>
-          ))}
+            )
+          })}
         </section>
       )}
     </>
@@ -1521,6 +1533,9 @@ function CreateExamModal({
 }) {
   const [title, setTitle] = useState(initialExam?.title || "")
   const [subject, setSubject] = useState(initialExam?.subject || "")
+  const [classes, setClasses] = useState<StudentClass[]>([])
+  const [selectedClassIds, setSelectedClassIds] = useState<string[]>(initialExam?.assignedClassIds || [])
+  const [classesLoading, setClassesLoading] = useState(true)
   const [startTime, setStartTime] = useState(() =>
     initialExam ? dateInput(new Date(initialExam.startTime)) : dateInput(new Date(Date.now() + 5 * 60_000)),
   )
@@ -1545,6 +1560,23 @@ function CreateExamModal({
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const [step, setStep] = useState<1 | 2>(initialExam ? 2 : 1)
+
+  useEffect(() => {
+    let mounted = true
+    fetch("/api/classes", { cache: "no-store" })
+      .then(async (response) => {
+        const body = await response.json()
+        if (!response.ok) throw new Error(body.error || "Could not load classes.")
+        if (mounted) setClasses(body.classes as StudentClass[])
+      })
+      .catch((cause) => {
+        if (mounted) setError(cause instanceof Error ? cause.message : "Could not load classes.")
+      })
+      .finally(() => {
+        if (mounted) setClassesLoading(false)
+      })
+    return () => { mounted = false }
+  }, [])
 
   async function parseText() {
     if (!rawText.trim()) {
@@ -1697,6 +1729,7 @@ function CreateExamModal({
         maxRetries,
         maxAttempts,
         gradeBands,
+        assignedClassIds: selectedClassIds,
         photoUploadWindowMinutes: parsed.paper2.some((question) => question.allowPhotoUpload)
           ? photoUploadWindowMinutes
           : 0,
@@ -1799,10 +1832,39 @@ function CreateExamModal({
                 <div className="field">
                   <label>Student access</label>
                   <div className="access-preview">
-                    Assign approved student accounts after publishing. Students sign in with their school Student ID and password.
+                    Choose classes below for automatic access, or assign individual students after publishing. Students sign in with their school Student ID and password.
                   </div>
                 </div>
               </div>
+              <section className="exam-class-targeting" aria-labelledby="class-targeting-title">
+                <div>
+                  <strong id="class-targeting-title">Assign to classes</strong>
+                  <p>Students in selected classes can take this exam. Students who join the class later will also receive it.</p>
+                </div>
+                {classesLoading ? (
+                  <small className="student-form-help">Loading classes…</small>
+                ) : classes.length ? (
+                  <div className="exam-class-options">
+                    {classes.map((studentClass) => (
+                      <label key={studentClass.id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedClassIds.includes(studentClass.id)}
+                          onChange={(event) => setSelectedClassIds((current) => event.target.checked
+                            ? [...new Set([...current, studentClass.id])]
+                            : current.filter((id) => id !== studentClass.id))}
+                        />
+                        <span>{studentClass.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="student-form-help">No classes exist yet. Leave this blank to assign students later from the Students page.</p>
+                )}
+                {classes.length > 0 && selectedClassIds.length === 0 && (
+                  <small className="student-form-help">No class selected. You can assign this exam to individual students later.</small>
+                )}
+              </section>
               <div className="section-divider">
                 <div>
                   <strong>Anti-cheat thresholds</strong>
