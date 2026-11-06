@@ -31,19 +31,38 @@ function examAssignment(
   const attempts = exam.attempts
     .filter((item) => belongsToStudent(item, student.id, student.studentNumber, student.waecCandidateNumber))
     .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
-  const latest = attempts[0]
+  const completedAttempts = attempts.filter((item) => item.status === "submitted" || item.status === "graded")
+  const latest = completedAttempts[0]
+  const latestActivity = attempts[0]
+  const maxAttempts = Math.max(1, Math.floor(Number(exam.maxAttempts) || 1))
+  const attemptsUsed = completedAttempts.length
+  const attemptsRemaining = Math.max(0, maxAttempts - attemptsUsed)
   const nowWithinExamWindow = now >= Date.parse(exam.startTime) && now <= Date.parse(exam.endTime)
+  const lockCount = attempts.filter((item) => item.status === "locked").length
+  const start = exam.candidateStartTimes?.[student.id]
+  const activeStart = Boolean(
+    start && nowWithinExamWindow &&
+    (!latest || Date.parse(start.startedAt) > Date.parse(latest.submittedAt)),
+  )
+  const canRetry = attemptsUsed > 0 && attemptsRemaining > 0 && nowWithinExamWindow &&
+    !activeStart && lockCount <= exam.maxRetries
   let status: StudentExamAssignment["status"]
-  if (latest?.status === "graded") status = "graded"
+  if (activeStart) status = "in-progress"
+  else if (
+    latestActivity?.status === "locked" &&
+    (!latest || latestActivity.submittedAt > latest.submittedAt)
+  ) {
+    status = lockCount <= (exam.maxRetries || 0) && nowWithinExamWindow
+      ? latest ? latest.status : "ready"
+      : latest ? latest.status : "locked"
+  }
+  else if (latest?.status === "graded") status = "graded"
   else if (latest?.status === "submitted") status = "submitted"
-  else if (latest?.status === "locked") {
-    const lockCount = attempts.filter((item) => item.status === "locked").length
+  else if (latestActivity?.status === "locked") {
     status = lockCount <= (exam.maxRetries || 0) && nowWithinExamWindow ? "ready" : "locked"
   }
   else {
-    const start = exam.candidateStartTimes?.[student.id]
-    if (start && nowWithinExamWindow) status = "in-progress"
-    else if (now < Date.parse(exam.startTime)) status = "upcoming"
+    if (now < Date.parse(exam.startTime)) status = "upcoming"
     else if (now > Date.parse(exam.endTime)) status = "expired"
     else status = "ready"
   }
@@ -60,6 +79,17 @@ function examAssignment(
         grade: getAttemptGrade(exam, latest),
       }
     : undefined
+  const attemptHistory = [...completedAttempts].reverse().map((item) => ({
+    id: item.id,
+    submittedAt: item.submittedAt,
+    objectiveScore: item.objectiveScore,
+    objectiveMax: item.objectiveMax,
+    theoryScore: item.theoryScore,
+    theoryMax: item.theoryMax,
+    status: item.status as "submitted" | "graded",
+    teacherReviewed: item.teacherReviewed,
+    grade: getAttemptGrade(exam, item),
+  }))
   return {
     id: exam.id,
     title: exam.title,
@@ -68,6 +98,11 @@ function examAssignment(
     endTime: exam.endTime,
     durationMinutes: exam.durationMinutes,
     status,
+    attemptsUsed,
+    maxAttempts,
+    attemptsRemaining,
+    canRetry,
+    attemptHistory,
     attempt,
     paper2Pending: Boolean(attempt && exam.questions.paper2.length && attempt.theoryMax === undefined),
   }

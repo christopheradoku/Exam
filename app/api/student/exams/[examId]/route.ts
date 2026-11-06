@@ -12,7 +12,7 @@ import { shuffleExamPayload } from "../../../../../src/lib/shuffleExamPayload"
 import type { TheoryPart } from "../../../../../src/lib/examTypes"
 
 type Body = {
-  action?: "enter" | "start" | "submit" | "lockout" | "open-photo-upload"
+  action?: "enter" | "start" | "submit" | "lockout" | "open-photo-upload" | "answer-key"
   accessCode?: string
   candidateName?: string
   candidateNumber?: string
@@ -59,6 +59,10 @@ function timeGate(exam: PortalExam) {
   return "open"
 }
 
+function attemptLimit(exam: PortalExam) {
+  return Math.max(1, Math.floor(Number(exam.maxAttempts) || 1))
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ examId: string }> },
@@ -70,7 +74,7 @@ export async function POST(
       { error: "Invalid exam request." },
       { status: 400 },
     )
-  if (!body.action || !["enter", "start", "submit", "lockout", "open-photo-upload"].includes(body.action))
+  if (!body.action || !["enter", "start", "submit", "lockout", "open-photo-upload", "answer-key"].includes(body.action))
     return NextResponse.json({ error: "Unsupported exam action." }, { status: 400 })
   const student = await getStudentForRequest(request)
   if (!student)
@@ -86,14 +90,36 @@ export async function POST(
       (attempt.candidateNumber === student.studentNumber ||
         (!!student.waecCandidateNumber && attempt.candidateNumber === student.waecCandidateNumber)))
   const candidateNumber = student.waecCandidateNumber || student.studentNumber
+  if (body.action === "answer-key") {
+    if (Date.now() <= Date.parse(exam.endTime))
+      return NextResponse.json({
+        available: false,
+        closesAt: exam.endTime,
+      })
+    if (!exam.attempts.some((attempt) => belongsToStudent(attempt) && (attempt.status === "submitted" || attempt.status === "graded")))
+      return NextResponse.json({ error: "Submit the examination before viewing the answers." }, { status: 403 })
+    return NextResponse.json({
+      available: true,
+      paper1: exam.questions.paper1.map((question) => ({
+        id: question.id,
+        stem: question.stem,
+        options: question.options,
+        correctOptionId: question.correctOptionId,
+      })),
+      paper2: exam.questions.paper2.map((question) => ({
+        id: question.id,
+        prompt: question.prompt,
+        expectedAnswer: question.expectedAnswer || "",
+        rubric: question.rubric || [],
+      })),
+    })
+  }
   if (body.action === "open-photo-upload") {
     const duration = Math.min(30, Math.max(0, exam.photoUploadWindowMinutes || 0))
     const allowedIds = new Set(exam.questions.paper2.filter((question) => question.allowPhotoUpload).map((question) => question.id))
     if (!duration || !allowedIds.size)
       return NextResponse.json({ error: "This exam has no handwritten photo answers enabled." }, { status: 400 })
     const key = student.id
-    if (exam.attempts.some((attempt) => belongsToStudent(attempt) && (attempt.status === "submitted" || attempt.status === "graded")))
-      return NextResponse.json({ error: "This candidate has already submitted this examination." }, { status: 403 })
     const examStart = exam.candidateStartTimes?.[key]
     if (!examStart)
       return NextResponse.json({ error: "The timed exam has not been started for this candidate." }, { status: 403 })
@@ -143,7 +169,7 @@ export async function POST(
         belongsToStudent(attempt) &&
         (attempt.status === "submitted" || attempt.status === "graded"),
     ).length
-    if (completedAttempts >= (exam.maxAttempts ?? 1))
+    if (completedAttempts >= attemptLimit(exam))
       return NextResponse.json(
         { error: "The allowed number of attempts has been used.", gate: "closed" },
         { status: 403 },
@@ -182,7 +208,16 @@ export async function POST(
     if (body.action === "start") {
       const key = student.id
       exam.candidateStartTimes ||= {}
-      const start = exam.candidateStartTimes[key]
+      const latestCompletion = exam.attempts
+        .filter((attempt) => belongsToStudent(attempt) && (attempt.status === "submitted" || attempt.status === "graded"))
+        .reduce((latest, attempt) => Math.max(latest, Date.parse(attempt.submittedAt) || 0), 0)
+      let start = exam.candidateStartTimes[key]
+      // Clear a start record left by older versions after a completed attempt.
+      if (start && Date.parse(start.startedAt) <= latestCompletion) {
+        delete exam.candidateStartTimes[key]
+        delete exam.photoUploadWindows?.[key]
+        start = undefined
+      }
       if (!start) {
         const startedAt = Date.now()
         deadlineAt = new Date(Math.min(startedAt + exam.durationMinutes * 60_000, Date.parse(exam.endTime))).toISOString()
@@ -230,8 +265,12 @@ export async function POST(
   if (body.action === "submit") {
     if (!exam.candidateStartTimes?.[student.id])
       return NextResponse.json({ error: "Start the assigned exam before submitting it." }, { status: 403 })
-    if (exam.attempts.some((attempt) => belongsToStudent(attempt) && (attempt.status === "submitted" || attempt.status === "graded")))
-      return NextResponse.json({ error: "This candidate has already submitted this examination." }, { status: 403 })
+    const completedAttempts = exam.attempts.filter(
+      (item) => belongsToStudent(item) && (item.status === "submitted" || item.status === "graded"),
+    ).length
+    const maxAttempts = attemptLimit(exam)
+    if (completedAttempts >= maxAttempts)
+      return NextResponse.json({ error: "You have used all attempts allowed for this examination." }, { status: 403 })
     const allowedPhotoIds = new Set(exam.questions.paper2.filter((question) => question.allowPhotoUpload).map((question) => question.id))
     const photos = body.photoAnswers || {}
     const hasPhotoFeature = allowedPhotoIds.size > 0 && (exam.photoUploadWindowMinutes || 0) > 0
@@ -285,10 +324,26 @@ export async function POST(
     }
   }
   exam.attempts.push(attempt)
+  if (body.action === "submit") {
+    // A submitted try is complete. The next allowed retry gets its own fresh timer.
+    delete exam.candidateStartTimes?.[student.id]
+    delete exam.photoUploadWindows?.[student.id]
+  }
   await saveExam(exam)
   const studentAttempt = { ...attempt, photoAnswers: undefined }
+  const attemptsUsed = exam.attempts.filter(
+    (item) => belongsToStudent(item) && (item.status === "submitted" || item.status === "graded"),
+  ).length
+  const attemptsRemaining = Math.max(0, attemptLimit(exam) - attemptsUsed)
+  const lockoutsUsed = exam.attempts.filter(
+    (item) => belongsToStudent(item) && item.status === "locked",
+  ).length
   return NextResponse.json({
     attempt: studentAttempt,
+    attemptsUsed,
+    maxAttempts: attemptLimit(exam),
+    attemptsRemaining,
+    canRetry: attemptsRemaining > 0 && lockoutsUsed <= exam.maxRetries && Date.now() <= Date.parse(exam.endTime),
     paper2Pending:
       body.action === "submit" &&
       !!exam.questions.paper2.length &&

@@ -25,6 +25,21 @@ export type StudentExamAssignment = {
   endTime: string
   durationMinutes: number
   status: "upcoming" | "ready" | "in-progress" | "expired" | "locked" | "submitted" | "graded"
+  attemptsUsed: number
+  maxAttempts: number
+  attemptsRemaining: number
+  canRetry: boolean
+  attemptHistory: Array<{
+    id: string
+    submittedAt: string
+    objectiveScore: number
+    objectiveMax: number
+    theoryScore?: number
+    theoryMax?: number
+    status: "submitted" | "graded"
+    teacherReviewed?: boolean
+    grade?: string
+  }>
   attempt?: {
     id: string
     submittedAt: string

@@ -68,6 +68,11 @@ export default function StudentPortal() {
   }, [])
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("view") === "history")
+      setView("history")
+  }, [])
+
+  useEffect(() => {
     let mounted = true
     fetch("/api/student-auth/dashboard", { cache: "no-store" })
       .then(async (response) => {
@@ -109,7 +114,7 @@ export default function StudentPortal() {
     [dashboard],
   )
   const historyExams = useMemo(
-    () => dashboard?.exams.filter((exam) => !["upcoming", "ready", "in-progress"].includes(exam.status)) || [],
+    () => dashboard?.exams.filter((exam) => exam.attemptsUsed > 0 || !["upcoming", "ready", "in-progress"].includes(exam.status)) || [],
     [dashboard],
   )
   const currentList = view === "exams"
@@ -259,7 +264,7 @@ export default function StudentPortal() {
   const needsPasswordChange = student.mustChangePassword
   const readyCount = exams.filter((exam) => exam.status === "ready").length
   const upcomingCount = exams.filter((exam) => exam.status === "upcoming").length
-  const resultCount = exams.filter((exam) => exam.status === "submitted" || exam.status === "graded").length
+  const resultCount = exams.reduce((total, exam) => total + exam.attemptsUsed, 0)
 
   return (
     <main className="student-portal-page">
@@ -289,22 +294,24 @@ export default function StudentPortal() {
             <section className="student-summary-grid">
               <article><small>Ready now</small><strong>{readyCount}</strong><span>Assigned exams you can start</span></article>
               <article><small>Upcoming</small><strong>{upcomingCount}</strong><span>Scheduled for a later time</span></article>
-              <article><small>Results</small><strong>{resultCount}</strong><span>Submitted exam records</span></article>
+              <article><small>Results</small><strong>{resultCount}</strong><span>Submitted attempts</span></article>
             </section>
             <section className="student-dashboard-panel">
               <div className="student-list-heading"><div><h2>{view === "exams" ? "My examinations" : "Results and past exams"}</h2><p>{view === "exams" ? "Your upcoming and active assignments." : "Submitted results, expired assignments, and locked attempts."}</p></div><div className="student-list-tabs"><button className={view === "exams" ? "active" : ""} onClick={() => setView("exams")}>Exams <span>{activeExams.length}</span></button><button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>History <span>{historyExams.length}</span></button></div></div>
               {currentList.length ? (
                 <div className="student-exam-cards">
                   {currentList.map((exam) => {
-                    const hasResult = exam.status === "submitted" || exam.status === "graded"
+                    const hasResult = exam.attemptsUsed > 0
                     const statusLabel = exam.status === "in-progress" ? "In progress" : exam.status === "ready" ? "Ready to start" : exam.status === "upcoming" ? "Upcoming" : exam.status === "expired" ? "Expired" : exam.status === "locked" ? "Locked" : exam.paper2Pending ? "Marking pending" : "Result available"
                     return (
                       <article className="student-exam-card" key={exam.id}>
                         <div className="student-exam-card-main"><span className={`student-exam-status status-${exam.status}`}>{statusLabel}</span><h3>{exam.title}</h3><p>{exam.subject} · {exam.durationMinutes} minutes</p><small>{exam.status === "expired" ? `Closed ${formatDate(exam.endTime)}` : `Starts ${formatDate(exam.startTime)}`}</small>
-                          {hasResult && exam.attempt && <div className="student-result-summary"><span>Score <strong>{exam.attempt.objectiveScore + (exam.attempt.theoryScore || 0)} / {exam.attempt.objectiveMax + (exam.attempt.theoryMax || 0)}</strong></span>{exam.attempt.grade && <span className={`student-grade grade-${gradeTone(exam.attempt.grade)}`}>Grade {exam.attempt.grade}</span>}{exam.paper2Pending && <small>Paper 2 is still being marked; this result can change.</small>}{exam.attempt.grade && !exam.paper2Pending && <small>{gradeAdvice(exam.attempt.grade)}</small>}{exam.attempt.teacherReviewed && <small>Teacher review complete</small>}</div>}
+                          {hasResult && exam.attempt && <div className="student-result-summary"><span>Latest score <strong>{exam.attempt.objectiveScore + (exam.attempt.theoryScore || 0)} / {exam.attempt.objectiveMax + (exam.attempt.theoryMax || 0)}</strong></span>{exam.attempt.grade && <span className={`student-grade grade-${gradeTone(exam.attempt.grade)}`}>Grade {exam.attempt.grade}</span>}<span>Attempt <strong>{exam.attemptsUsed} of {exam.maxAttempts}</strong></span>{exam.attemptsRemaining > 0 ? <small>{exam.attemptsRemaining} {exam.attemptsRemaining === 1 ? "attempt" : "attempts"} {exam.canRetry ? "remaining; retry before the exam closes." : "remain, but are currently unavailable."}</small> : <small>No attempts remain for this exam.</small>}{exam.paper2Pending && <small>Paper 2 is still being marked; this result can change.</small>}{exam.attempt.grade && !exam.paper2Pending && <small>{gradeAdvice(exam.attempt.grade)}</small>}{exam.attempt.teacherReviewed && <small>Teacher review complete</small>}
+                            {exam.attemptHistory.length > 0 && <div className="student-attempt-history"><strong>Submitted attempts</strong>{exam.attemptHistory.map((result, index) => <div className="student-attempt-row" key={result.id}><span>Attempt {index + 1} · {formatDate(result.submittedAt)}</span><span>{result.objectiveScore + (result.theoryScore || 0)} / {result.objectiveMax + (result.theoryMax || 0)}{result.grade ? ` · Grade ${result.grade}` : result.status === "submitted" ? " · Marking pending" : ""}</span>{result.teacherReviewed && <small>Teacher reviewed</small>}</div>)}</div>}
+                          </div>}
                         </div>
                         <div className="student-exam-card-action">
-                          {(exam.status === "ready" || exam.status === "in-progress") ? <a className="primary-button" href={`/exam/${exam.id}`}>{exam.status === "ready" ? "View instructions" : "Resume exam"}</a> : hasResult ? <span className="student-card-note">Saved to your history</span> : exam.status === "upcoming" ? <span className="student-card-note">Available at the scheduled time</span> : <span className="student-card-note">Contact your teacher for help</span>}
+                          {hasResult && exam.canRetry ? <a className="primary-button" href={`/exam/${exam.id}`}>Retry exam · {exam.attemptsRemaining} left</a> : (exam.status === "ready" || exam.status === "in-progress") ? <a className="primary-button" href={`/exam/${exam.id}`}>{exam.status === "ready" ? "View instructions" : "Resume exam"}</a> : hasResult ? <span className="student-card-note">Saved to your history</span> : exam.status === "upcoming" ? <span className="student-card-note">Available at the scheduled time</span> : <span className="student-card-note">Contact your teacher for help</span>}
                         </div>
                       </article>
                     )

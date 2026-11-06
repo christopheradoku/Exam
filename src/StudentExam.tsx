@@ -57,6 +57,16 @@ type Attempt = {
   theoryMax?: number
   status?: "submitted" | "locked" | "graded"
 }
+type AttemptSummary = {
+  attemptsUsed: number
+  maxAttempts: number
+  attemptsRemaining: number
+  canRetry: boolean
+}
+type AnswerKey = {
+  paper1: ObjectiveQuestion[]
+  paper2: TheoryPart[]
+}
 type Screen = "gate" | "preflight" | "paper1" | "paper2" | "upload" | "submitted" | "locked"
 
 async function compressHandwrittenPhoto(file: File) {
@@ -269,7 +279,11 @@ export default function StudentExam({ examId }: { examId: string }) {
   const [autoSubmitReason, setAutoSubmitReason] = useState("")
   const [remaining, setRemaining] = useState(0)
   const [attempt, setAttempt] = useState<Attempt | null>(null)
+  const [attemptSummary, setAttemptSummary] = useState<AttemptSummary | null>(null)
   const [paper2Pending, setPaper2Pending] = useState(false)
+  const [answerKeyData, setAnswerKeyData] = useState<AnswerKey | null>(null)
+  const [answerKeyLoading, setAnswerKeyLoading] = useState(false)
+  const [answerKeyError, setAnswerKeyError] = useState("")
   const [uploadSeconds, setUploadSeconds] = useState(0)
   const [photoBusyQuestion, setPhotoBusyQuestion] = useState("")
   const [proctorOn, setProctorOn] = useState(false)
@@ -674,6 +688,12 @@ export default function StudentExam({ examId }: { examId: string }) {
       if (!response.ok)
         throw new Error(body.error || "Could not submit your answers.")
       setAttempt(body.attempt)
+      setAttemptSummary({
+        attemptsUsed: body.attemptsUsed,
+        maxAttempts: body.maxAttempts,
+        attemptsRemaining: body.attemptsRemaining,
+        canRetry: body.canRetry,
+      })
       setPaper2Pending(body.paper2Pending)
       setScreen("submitted")
       sessionStorage.removeItem(answerKey)
@@ -731,6 +751,32 @@ export default function StudentExam({ examId }: { examId: string }) {
       attempt.theoryMax === undefined &&
       exam?.questions.paper2.length,
   )
+  const examClosed = Boolean(exam && Date.now() > Date.parse(exam.endTime))
+
+  async function viewAnswerKey() {
+    setAnswerKeyLoading(true)
+    setAnswerKeyError("")
+    try {
+      const response = await fetch(`/api/student/exams/${examId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "answer-key" }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || "Could not load the answers.")
+      if (!body.available) {
+        setAnswerKeyError(
+          `Answers will be available after the exam closes at ${new Date(body.closesAt).toLocaleString()}.`,
+        )
+        return
+      }
+      setAnswerKeyData(body as AnswerKey)
+    } catch (cause) {
+      setAnswerKeyError(cause instanceof Error ? cause.message : "Could not load the answers.")
+    } finally {
+      setAnswerKeyLoading(false)
+    }
+  }
 
   if (!identityReady)
     return <main className="student-page"><div className="student-gate"><Brand /><span className="eyebrow">STUDENT ACCOUNT</span><h1>Checking your sign-in</h1><p>Verifying your student session before opening the exam.</p></div></main>
@@ -750,6 +796,16 @@ export default function StudentExam({ examId }: { examId: string }) {
               ? `Your exam was automatically submitted because ${autoSubmitReason.toLowerCase()}. Your teacher will review the result.`
               : "Your responses have been saved. AI marking is provisional and your teacher will review the result."}
           </p>
+          {attemptSummary && (
+            <div className="pending-banner">
+              Attempt {attemptSummary.attemptsUsed} of {attemptSummary.maxAttempts} submitted.
+              {attemptSummary.canRetry
+                ? ` You have ${attemptSummary.attemptsRemaining} ${attemptSummary.attemptsRemaining === 1 ? "attempt" : "attempts"} remaining before the exam closes.`
+                : attemptSummary.attemptsRemaining > 0
+                  ? ` ${attemptSummary.attemptsRemaining} ${attemptSummary.attemptsRemaining === 1 ? "attempt" : "attempts"} remain, but the exam is closed.`
+                  : " No attempts remain."}
+            </div>
+          )}
           <div className="result-score">
             <div>
               <small>PAPER 1 · OBJECTIVE</small>
@@ -787,9 +843,56 @@ export default function StudentExam({ examId }: { examId: string }) {
               teacher will see the updated report when grading is available.
             </div>
           )}
+          <div className="answer-review-panel">
+            <div>
+              <strong>Review correct answers</strong>
+              <small>
+                {examClosed
+                  ? "The examination is closed. You can now review the answer key."
+                  : `Answers unlock when the examination closes at ${new Date(exam?.endTime || "").toLocaleString()}.`}
+              </small>
+            </div>
+            <button
+              className="secondary-button"
+              onClick={() => void viewAnswerKey()}
+              disabled={!examClosed || answerKeyLoading}
+            >
+              {answerKeyLoading ? "Loading…" : answerKeyData ? "Answers shown" : "View answers"}
+            </button>
+          </div>
+          {answerKeyError && <div className="inline-error">{answerKeyError}</div>}
+          {answerKeyData && (
+            <div className="answer-key-list">
+              {answerKeyData.paper1.map((question, index) => {
+                const correct = question.options.find(
+                  (option) => option.id === question.correctOptionId,
+                )
+                return (
+                  <article key={question.id}>
+                    <small>QUESTION {index + 1}</small>
+                    <strong>{question.stem}</strong>
+                    <span>Correct answer: {correct?.label}. {correct?.text}</span>
+                  </article>
+                )
+              })}
+              {answerKeyData.paper2.map((question, index) => (
+                <article key={question.id}>
+                  <small>THEORY {index + 1}</small>
+                  <strong>{question.prompt}</strong>
+                  <span>Model answer: {question.expectedAnswer || "See the marking guide."}</span>
+                </article>
+              ))}
+            </div>
+          )}
           <small className="receipt-id">
             SUBMISSION ID · {attempt?.id.slice(0, 8).toUpperCase()}
           </small>
+          {attemptSummary?.canRetry && (
+            <a className="primary-button" href={`/exam/${examId}`}>
+              Retry exam · {attemptSummary.attemptsRemaining} left
+            </a>
+          )}
+          <a className="primary-button" href="/student?view=history">View attempt history</a>
         </section>
       </main>
     )
