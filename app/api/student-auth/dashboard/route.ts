@@ -33,34 +33,20 @@ function examAssignment(
     .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
   const completedAttempts = attempts.filter((item) => item.status === "submitted" || item.status === "graded")
   const latest = completedAttempts[0]
-  const latestActivity = attempts[0]
   const maxAttempts = Math.max(1, Math.floor(Number(exam.maxAttempts) || 1))
   const attemptsUsed = completedAttempts.length
   const attemptsRemaining = Math.max(0, maxAttempts - attemptsUsed)
   const nowWithinExamWindow = now >= Date.parse(exam.startTime) && now <= Date.parse(exam.endTime)
-  const lockCount = attempts.filter((item) => item.status === "locked").length
   const start = exam.candidateStartTimes?.[student.id]
   const activeStart = Boolean(
     start && nowWithinExamWindow &&
     (!latest || Date.parse(start.startedAt) > Date.parse(latest.submittedAt)),
   )
-  const canRetry = attemptsUsed > 0 && attemptsRemaining > 0 && nowWithinExamWindow &&
-    !activeStart && lockCount <= exam.maxRetries
+  const canRetry = attemptsUsed > 0 && attemptsRemaining > 0 && nowWithinExamWindow && !activeStart
   let status: StudentExamAssignment["status"]
   if (activeStart) status = "in-progress"
-  else if (
-    latestActivity?.status === "locked" &&
-    (!latest || latestActivity.submittedAt > latest.submittedAt)
-  ) {
-    status = lockCount <= (exam.maxRetries || 0) && nowWithinExamWindow
-      ? latest ? latest.status : "ready"
-      : latest ? latest.status : "locked"
-  }
   else if (latest?.status === "graded") status = "graded"
   else if (latest?.status === "submitted") status = "submitted"
-  else if (latestActivity?.status === "locked") {
-    status = lockCount <= (exam.maxRetries || 0) && nowWithinExamWindow ? "ready" : "locked"
-  }
   else {
     if (now < Date.parse(exam.startTime)) status = "upcoming"
     else if (now > Date.parse(exam.endTime)) status = "expired"

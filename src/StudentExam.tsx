@@ -1,6 +1,6 @@
 "use client"
 // Timer starts once when the candidate enters; changing paper doesn't reset it.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { FormEvent } from "react"
 import { useLocalFaceProctor } from "./hooks/useLocalFaceProctor"
 import type { ObjectiveQuestion, TheoryPart } from "./lib/examTypes"
@@ -14,10 +14,6 @@ type StudentExamData = {
   startTime: string
   endTime: string
   durationMinutes: number
-  lookAwayWarningSecs: number
-  lockoutThresholdSecs: number
-  maxWarnings: number
-  maxRetries: number
   maxAttempts: number
   gradeBands: GradeBand[]
   photoUploadWindowMinutes?: number
@@ -67,7 +63,7 @@ type AnswerKey = {
   paper1: ObjectiveQuestion[]
   paper2: TheoryPart[]
 }
-type Screen = "gate" | "preflight" | "paper1" | "paper2" | "upload" | "submitted" | "locked"
+type Screen = "gate" | "preflight" | "paper1" | "paper2" | "upload" | "submitted"
 
 async function compressHandwrittenPhoto(file: File) {
   const bitmap = await createImageBitmap(file)
@@ -159,10 +155,6 @@ function createExamPreview(
     startTime: preview.startTime || "",
     endTime: preview.endTime || "",
     durationMinutes: preview.durationMinutes || 0,
-    lookAwayWarningSecs: preview.lookAwayWarningSecs ?? 3,
-    lockoutThresholdSecs: preview.lockoutThresholdSecs ?? 7,
-    maxWarnings: preview.maxWarnings ?? 3,
-    maxRetries: preview.maxRetries ?? 0,
     maxAttempts: preview.maxAttempts ?? 1,
     gradeBands: preview.gradeBands ?? defaultGradeBands,
     questions: { paper1: [], paper2: [] },
@@ -287,9 +279,6 @@ export default function StudentExam({ examId }: { examId: string }) {
   const [uploadSeconds, setUploadSeconds] = useState(0)
   const [photoBusyQuestion, setPhotoBusyQuestion] = useState("")
   const [proctorOn, setProctorOn] = useState(false)
-  const [warnings, setWarnings] = useState(0)
-  const [reshuffleCount, setReshuffleCount] = useState(0)
-  const [shuffleSeed, setShuffleSeed] = useState<string | undefined>()
   const [isMobilePhone, setIsMobilePhone] = useState(false)
   const answerKey = `wassce-answers-${examId}-${studentProfile?.id || "unverified"}`
   const formRef = useRef<HTMLFormElement>(null)
@@ -297,24 +286,6 @@ export default function StudentExam({ examId }: { examId: string }) {
   const autoSubmitRef = useRef<(reason: string) => void>(() => undefined)
   const deadlineAt = useRef(0)
   const photoUploadDeadlineAt = useRef(0)
-  const liveSession = useRef({
-    exam: null as StudentExamData | null,
-    candidateName: "",
-    candidateNumber: "",
-    answers: {} as Record<string, string>,
-    warnings: 0,
-    reshuffleCount: 0,
-    shuffleSeed: undefined as string | undefined,
-  })
-  liveSession.current = {
-    exam,
-    candidateName,
-    candidateNumber,
-    answers,
-    warnings,
-    reshuffleCount,
-    shuffleSeed,
-  }
 
   useEffect(() => {
     let mounted = true
@@ -345,43 +316,11 @@ export default function StudentExam({ examId }: { examId: string }) {
     return () => { mounted = false }
   }, [examId])
 
-  const loggedOut = useCallback(
-    async (reason: string, currentWarnings: number) => {
-      setProctorOn(false)
-      setError(reason)
-      const current = liveSession.current
-      if (current.exam) {
-        try {
-          await fetch(`/api/student/exams/${examId}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "lockout",
-              answers: current.answers,
-              warnings: current.warnings + currentWarnings,
-              reshuffleCount: current.reshuffleCount,
-              shuffleSeed: current.shuffleSeed,
-            }),
-          })
-        } catch {
-          // The lock screen still prevents continuing in this browser.
-        }
-      }
-      setScreen("locked")
-      sessionStorage.removeItem(answerKey)
-    },
-    [answerKey, examId],
-  )
   const isExamScreen = screen === "paper1" || screen === "paper2"
   const proctor = useLocalFaceProctor({
     enabled: screen === "preflight" || (proctorOn && isExamScreen),
     monitoring: proctorOn && isExamScreen,
-    warningThresholdSeconds: exam?.lookAwayWarningSecs,
-    lockoutThresholdSeconds: exam?.lockoutThresholdSecs,
-    maxWarnings: exam?.maxWarnings,
-    onLockout: loggedOut,
   })
-  liveSession.current.warnings = warnings
 
   useEffect(() => {
     if (!proctorOn || !isExamScreen) return
@@ -470,15 +409,15 @@ export default function StudentExam({ examId }: { examId: string }) {
     try {
       sessionStorage.setItem(
         answerKey,
-        JSON.stringify({ answers, photoAnswers, candidateNumber, shuffleSeed }),
+        JSON.stringify({ answers, photoAnswers, candidateNumber }),
       )
     } catch {
       sessionStorage.setItem(
         answerKey,
-        JSON.stringify({ answers, candidateNumber, shuffleSeed }),
+        JSON.stringify({ answers, candidateNumber }),
       )
     }
-  }, [answerKey, answers, photoAnswers, candidateNumber, exam, screen, shuffleSeed])
+  }, [answerKey, answers, photoAnswers, candidateNumber, exam, screen])
   useEffect(() => {
     if (!exam || !["paper1", "paper2"].includes(screen)) return
     if (!deadlineAt.current) return
@@ -538,29 +477,24 @@ export default function StudentExam({ examId }: { examId: string }) {
         throw new Error(body.error || "Unable to enter this exam.")
       setExam(body.exam)
       setGate("")
-      setShuffleSeed(body.shuffleSeed)
-      setReshuffleCount(body.reshuffleCount || 0)
-      const saved = !body.shuffleSeed ? sessionStorage.getItem(answerKey) : null
+      const saved = sessionStorage.getItem(answerKey)
       const savedAttempt = saved
         ? JSON.parse(saved) as {
             answers?: Record<string, string>
             photoAnswers?: Record<string, string>
             candidateNumber?: string
-            shuffleSeed?: string
           }
         : null
       setAnswers(
-        savedAttempt?.candidateNumber === candidateNumber &&
-          !savedAttempt.shuffleSeed
+        savedAttempt?.candidateNumber === candidateNumber
           ? savedAttempt.answers || {}
           : {},
       )
       setPhotoAnswers(
-        savedAttempt?.candidateNumber === candidateNumber && !savedAttempt.shuffleSeed
+        savedAttempt?.candidateNumber === candidateNumber
           ? savedAttempt.photoAnswers || {}
           : {},
       )
-      setWarnings(0)
       autoSubmitTriggeredRef.current = false
       setAutoSubmitReason("")
       proctor.reset()
@@ -609,9 +543,6 @@ export default function StudentExam({ examId }: { examId: string }) {
         throw new Error("Stay in fullscreen mode to start the exam. Press Start exam again.")
       setExam(body.exam)
       setGate("")
-      setShuffleSeed(body.shuffleSeed)
-      setReshuffleCount(body.reshuffleCount || 0)
-      setWarnings(0)
       autoSubmitTriggeredRef.current = false
       setAutoSubmitReason("")
       proctor.reset()
@@ -687,9 +618,6 @@ export default function StudentExam({ examId }: { examId: string }) {
           action: "submit",
           answers,
           photoAnswers,
-          warnings: proctor.warningCount + warnings,
-          reshuffleCount,
-          shuffleSeed,
         }),
       })
       const body = await response.json()
@@ -905,46 +833,7 @@ export default function StudentExam({ examId }: { examId: string }) {
       </main>
     )
 
-  if (screen === "locked")
-    return (
-      <main className="student-page">
-        <section className="student-gate locked-gate">
-          <span className="lock-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="5" y="10" width="14" height="11" rx="2" />
-              <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" />
-            </svg>
-          </span>
-          <span className="eyebrow danger-text">ANTI-CHEAT SESSION LOCKED</span>
-          <h1>Session locked</h1>
-          <p>
-            {error ||
-              "The proctoring limit was reached. Re-enter using your student account to continue."}
-          </p>
-          <div className="lock-info">
-            <strong>Questions will be reshuffled on re-entry.</strong>
-            <small>
-              Re-entry limits are enforced for your student account.
-            </small>
-          </div>
-          <form onSubmit={enter} className="gate-form">
-            <button
-              className="primary-button wide"
-              disabled={busy}
-            >
-              {busy ? "Checking…" : "Re-enter exam →"}
-            </button>
-          </form>
-          <a className="student-mode-switch" href="/student">Back to student dashboard</a>
-          {error && <div className="inline-error">{error}</div>}
-        </section>
-      </main>
-    )
-
   if (screen === "preflight") {
-    const warningSeconds = exam?.lookAwayWarningSecs ?? 3
-    const lockoutSeconds = exam?.lockoutThresholdSecs ?? 7
-    const warningLimit = exam?.maxWarnings ?? 3
     const cameraStatus = proctor.error
       ? "Camera check needs attention"
       : !proctor.active
@@ -952,18 +841,8 @@ export default function StudentExam({ examId }: { examId: string }) {
         : proctor.faceCount === null
           ? "Camera is on; checking your face…"
           : proctor.faceCount === 0
-            ? "No face detected. Move into the frame."
-            : proctor.faceCount > 1
-              ? "More than one face detected. Make sure only you are visible."
-              : proctor.identityMatch === false
-                ? "A different face was detected. Return to the face checked before the exam."
-              : !proctor.centered
-                ? "Move your face to the center of the frame."
-                : proctor.lookingAway
-                  ? "Face found. Look at the screen and center yourself."
-                  : !proctor.identityReady
-                    ? "Hold still while we register your starting face."
-                    : "Camera check passed — you are ready."
+            ? "No face detected yet. You can still start; the exam will beep if this continues."
+            : "Camera check ready. You can move naturally during the exam."
     const cameraStatusClass = proctor.error
       ? "preflight-status is-error"
       : proctor.ready
@@ -1023,33 +902,17 @@ export default function StudentExam({ examId }: { examId: string }) {
             </section>
 
             <section className="preflight-guidelines">
-              <span className="eyebrow">HOW TO AVOID CAMERA WARNINGS</span>
-              <h2>Stay visible and face the screen</h2>
+              <span className="eyebrow">CAMERA GUIDANCE</span>
+              <h2>Keep the camera available</h2>
               <ol>
-                <li>Allow camera access and keep the preview visible.</li>
-                <li>
-                  Sit in a well-lit place with your face centered in the frame.
-                </li>
-                <li>
-                  Make sure only you are visible; keep your face uncovered.
-                </li>
-                <li>
-                  The face checked here is compared during the exam. Another
-                  face triggers a beep and a camera warning.
-                </li>
-                <li>
-                  Keep your attention on the screen and avoid leaving the camera
-                  view.
-                </li>
+                <li>Allow camera access and keep the preview available during the exam.</li>
+                <li>Sit in a comfortable position with ordinary room lighting.</li>
+                <li>Small movements, looking down to write, glasses, and changes in lighting are okay.</li>
               </ol>
               <div className="preflight-warning-note">
-                <strong>Brief movement is okay.</strong>
+                <strong>Face presence only</strong>
                 <p>
-                  Warnings start after {warningSeconds} seconds without one
-                  centered face. Staying out of position for {lockoutSeconds}
-                  seconds or reaching {warningLimit} warnings can lock the
-                  attempt. If your camera or lighting causes problems, tell the
-                  invigilator before starting.
+                  The camera only checks whether it detects at least one face. It does not compare identity, direction, or position. Brief detection gaps are ignored. During the exam, if no face is detected for about two seconds, you will hear a reminder beep every few seconds until a face is visible again. Face detection will not lock or submit your exam.
                 </p>
               </div>
               <div className="preflight-candidate">
@@ -1096,7 +959,7 @@ export default function StudentExam({ examId }: { examId: string }) {
                   : countdown > 0
                     ? "Waiting for exam to open"
                     : !proctor.ready
-                      ? "Complete camera check to continue"
+                      ? "Starting camera check…"
                       : "Start exam →"}
               </button>
               <button
@@ -1271,31 +1134,31 @@ export default function StudentExam({ examId }: { examId: string }) {
         <div className="student-mobile-face-alert">
           <span className="student-mobile-face-preview">
             <video ref={proctor.headerVideoRef} autoPlay muted playsInline />
-            <i className={proctor.identityMatch === false || (proctor.faceCount || 0) > 1 ? "is-alert" : ""} />
+            <i className={proctor.missingFace ? "is-alert" : ""} />
           </span>
           <span className="student-mobile-face-label">
-            {proctor.identityMatch === false || (proctor.faceCount || 0) > 1
-              ? "Check face"
+            {proctor.missingFace
+              ? "Face not visible"
               : "Face check"}
           </span>
           <span
             className={
-              proctor.warning || proctor.warningCount > 0 || proctor.identityMatch === false || (proctor.faceCount || 0) > 1
+              proctor.missingFace
                 ? "student-mobile-notification is-alert"
                 : "student-mobile-notification"
             }
             role="img"
             aria-label={
-              proctor.warning || proctor.warningCount > 0 || proctor.identityMatch === false || (proctor.faceCount || 0) > 1
-                ? "Camera warning notification"
-                : "No camera warnings"
+              proctor.missingFace
+                ? "No face detected. A reminder beep is sounding."
+                : "Face detection is monitoring face presence."
             }
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
             </svg>
-            {(proctor.warningCount > 0 || proctor.identityMatch === false || (proctor.faceCount || 0) > 1) && (
-              <b>{proctor.warningCount || "!"}</b>
+            {proctor.missingFace && (
+              <b aria-hidden="true">!</b>
             )}
           </span>
         </div>
@@ -1467,27 +1330,21 @@ export default function StudentExam({ examId }: { examId: string }) {
               <video ref={proctor.videoRef} autoPlay muted playsInline />
               <span
                 className={
-                  proctor.warning || proctor.error
+                  proctor.missingFace || proctor.error
                     ? "camera-status warning"
                     : "camera-status"
                 }
               >
                 <i />
-                {proctor.warning
-                  ? `Look at the screen · ${Math.ceil(proctor.awaySeconds)}s`
-                  : proctor.error
-                    ? "Camera check needs attention"
+                {proctor.error
+                  ? "Camera check needs attention"
+                  : proctor.missingFace
+                    ? `No face detected · reminder beep · ${Math.ceil(proctor.missingFaceSeconds)}s`
                     : proctor.faceCount === 0
-                      ? "No face detected"
-                      : proctor.faceCount !== null && proctor.faceCount > 1
-                        ? "More than one face"
-                        : proctor.identityMatch === false
-                          ? "Different face detected"
-                        : proctor.faceCount === 1 && !proctor.centered
-                          ? "Center your face in frame"
-                          : proctor.active
-                            ? "Local camera check active"
-                            : "Starting camera…"}
+                      ? "No face detected yet"
+                      : proctor.active
+                        ? "Checking for face presence"
+                        : "Starting camera…"}
               </span>
               {proctor.error && <small>{proctor.error}</small>}
             </div>

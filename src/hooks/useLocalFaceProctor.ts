@@ -9,36 +9,20 @@ import {
 type WorkerResponse = { type: "ready" } | {
   type: "result"
   faceCount: number
-  centered: boolean
-  faceSignature: number[] | null
-  pose: {
-    yaw: number
-    pitch: number
-    roll: number
-  } | null
 } | { type: "error"; message: string }
 
 export type ProctorOptions = {
   enabled: boolean
   monitoring: boolean
-  warningThresholdSeconds?: number
-  lockoutThresholdSeconds?: number
-  maxWarnings?: number
   frameIntervalMs?: number
-  onLockout: (reason: string, warningCount: number) => void
 }
 
 export type ProctorState = {
   active: boolean
   ready: boolean
-  warning: boolean
-  warningCount: number
-  awaySeconds: number
+  missingFace: boolean
+  missingFaceSeconds: number
   faceCount: number | null
-  centered: boolean | null
-  identityReady: boolean
-  identityMatch: boolean | null
-  lookingAway: boolean
   error: string | null
   videoRef: RefCallback<HTMLVideoElement>
   headerVideoRef: RefCallback<HTMLVideoElement>
@@ -69,56 +53,27 @@ function playWarningTone(context: AudioContext | null) {
   }
 }
 
-function signatureDistance(first: number[], second: number[]) {
-  if (first.length !== second.length || !first.length) return Number.POSITIVE_INFINITY
-  let squaredError = 0
-  for (let i = 0; i < first.length; i++) squaredError += (first[i] - second[i]) ** 2
-  return Math.sqrt(squaredError / first.length)
-}
-
-function averageSignatures(samples: number[][]) {
-  return samples[0].map((_, index) =>
-    samples.reduce((total, sample) => total + sample[index], 0) / samples.length,
-  )
-}
-
 /** Runs face checks on the candidate's device. Camera frames never leave the browser. */
 export function useLocalFaceProctor({
   enabled,
   monitoring,
-  warningThresholdSeconds = 3,
-  lockoutThresholdSeconds = 7,
-  maxWarnings = 3,
   frameIntervalMs = 750,
-  onLockout,
 }: ProctorOptions): ProctorState {
   const videoElement = useRef<HTMLVideoElement | null>(null)
   const headerVideoElement = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const alertAudioRef = useRef<AudioContext | null>(null)
-  const identitySignatureRef = useRef<number[] | null>(null)
-  const identitySamplesRef = useRef<number[][]>([])
-  const lastFaceAlertAt = useRef(0)
   const monitoringRef = useRef(monitoring)
-  const awaySince = useRef<number | null>(null)
-  const warningCountRef = useRef(0)
-  const warningActive = useRef(false)
-  const lockedRef = useRef(false)
-  const lockoutRef = useRef(onLockout)
+  const noFaceSince = useRef<number | null>(null)
+  const lastNoFaceBeepAt = useRef(0)
   const [retryCount, setRetryCount] = useState(0)
   const [active, setActive] = useState(false)
   const [faceCount, setFaceCount] = useState<number | null>(null)
-  const [centered, setCentered] = useState<boolean | null>(null)
-  const [identityReady, setIdentityReady] = useState(false)
-  const [identityMatch, setIdentityMatch] = useState<boolean | null>(null)
-  const [lookingAway, setLookingAway] = useState(false)
-  const [warning, setWarning] = useState(false)
-  const [warningCount, setWarningCount] = useState(0)
-  const [awaySeconds, setAwaySeconds] = useState(0)
+  const [missingFace, setMissingFace] = useState(false)
+  const [missingFaceSeconds, setMissingFaceSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   monitoringRef.current = monitoring
-  lockoutRef.current = onLockout
 
   const enableAlertAudio = useCallback(() => {
     if (typeof window === "undefined" || !window.AudioContext) return
@@ -160,20 +115,11 @@ export function useLocalFaceProctor({
     }
   }, [])
 
-  const lock = useCallback((reason: string) => {
-    if (lockedRef.current) return
-    lockedRef.current = true
-    lockoutRef.current(reason, warningCountRef.current)
-  }, [])
-
   const reset = useCallback(() => {
-    lockedRef.current = false
-    warningCountRef.current = 0
-    awaySince.current = null
-    warningActive.current = false
-    setWarningCount(0)
-    setWarning(false)
-    setAwaySeconds(0)
+    noFaceSince.current = null
+    lastNoFaceBeepAt.current = 0
+    setMissingFace(false)
+    setMissingFaceSeconds(0)
     setError(null)
   }, [])
 
@@ -181,10 +127,10 @@ export function useLocalFaceProctor({
     setError(null)
     setActive(false)
     setFaceCount(null)
-    setCentered(null)
-    setIdentityReady(false)
-    setIdentityMatch(null)
-    setLookingAway(false)
+    noFaceSince.current = null
+    lastNoFaceBeepAt.current = 0
+    setMissingFace(false)
+    setMissingFaceSeconds(0)
     setRetryCount((current) => current + 1)
   }, [])
 
@@ -192,12 +138,10 @@ export function useLocalFaceProctor({
     if (!enabled) {
       setActive(false)
       setFaceCount(null)
-      setCentered(null)
-      identitySignatureRef.current = null
-      identitySamplesRef.current = []
-      setIdentityReady(false)
-      setIdentityMatch(null)
-      setLookingAway(false)
+      noFaceSince.current = null
+      lastNoFaceBeepAt.current = 0
+      setMissingFace(false)
+      setMissingFaceSeconds(0)
       return
     }
 
@@ -206,11 +150,8 @@ export function useLocalFaceProctor({
     let frameInFlight = false
     let stream: MediaStream | undefined
     let worker: Worker | undefined
-    identitySignatureRef.current = null
-    identitySamplesRef.current = []
-    lastFaceAlertAt.current = 0
-    setIdentityReady(false)
-    setIdentityMatch(null)
+    noFaceSince.current = null
+    lastNoFaceBeepAt.current = 0
 
     const setFailure = (message: string) => {
       if (disposed) return
@@ -224,95 +165,29 @@ export function useLocalFaceProctor({
       if (disposed) return
       const now = Date.now()
       setFaceCount(result.faceCount)
-      setCentered(result.faceCount === 1 ? result.centered : false)
-      const pose = result.pose
-      const frontal = Boolean(
-        pose && Math.abs(pose.yaw) <= 25 && Math.abs(pose.pitch) <= 20,
-      )
-      let identityMismatch = false
-
-      if (result.faceCount > 1) {
-        identityMismatch = true
-        if (!identitySignatureRef.current) identitySamplesRef.current = []
-        setIdentityMatch(false)
-      } else if (
-        result.faceCount === 1 &&
-        result.centered &&
-        frontal &&
-        result.faceSignature
-      ) {
-        if (!identitySignatureRef.current) {
-          const previousSample = identitySamplesRef.current.at(-1)
-          if (
-            previousSample &&
-            signatureDistance(previousSample, result.faceSignature) > 0.075
-          )
-            identitySamplesRef.current = []
-          identitySamplesRef.current.push(result.faceSignature)
-          if (identitySamplesRef.current.length >= 3) {
-            identitySignatureRef.current = averageSignatures(
-              identitySamplesRef.current.slice(-3),
-            )
-            setIdentityReady(true)
-            setIdentityMatch(true)
-          } else {
-            setIdentityMatch(null)
-          }
-        } else {
-          identityMismatch =
-            signatureDistance(
-              identitySignatureRef.current,
-              result.faceSignature,
-            ) > 0.075
-          setIdentityMatch(!identityMismatch)
-        }
-      } else {
-        if (!identitySignatureRef.current) identitySamplesRef.current = []
-        setIdentityMatch(null)
+      if (result.faceCount > 0) {
+        noFaceSince.current = null
+        lastNoFaceBeepAt.current = 0
+        setMissingFace(false)
+        setMissingFaceSeconds(0)
+        return
       }
-
-      if (identityMismatch && now - lastFaceAlertAt.current >= 1800) {
-        lastFaceAlertAt.current = now
-        playWarningTone(alertAudioRef.current)
-      }
-
-      const away =
-        result.faceCount !== 1 ||
-        !result.centered ||
-        identityMismatch ||
-        !pose ||
-        Math.abs(pose.yaw) > 25 ||
-        Math.abs(pose.pitch) > 20
-      setLookingAway(away)
-
       if (!monitoringRef.current) {
-        awaySince.current = null
-        warningActive.current = false
-        setWarning(false)
-        setAwaySeconds(0)
+        noFaceSince.current = null
+        setMissingFace(false)
+        setMissingFaceSeconds(0)
         return
       }
 
-      if (away) {
-        if (awaySince.current === null) awaySince.current = now
-        const elapsed = (now - awaySince.current) / 1000
-        setAwaySeconds(elapsed)
-        if (elapsed >= warningThresholdSeconds && !warningActive.current) {
-          warningActive.current = true
-          setWarning(true)
-          warningCountRef.current += 1
-          setWarningCount(warningCountRef.current)
-          playWarningTone(alertAudioRef.current)
-        }
-        if (elapsed >= lockoutThresholdSeconds)
-          lock("Continuous face-away threshold exceeded")
-        if (warningCountRef.current >= maxWarnings)
-          lock("Maximum proctoring warnings exceeded")
-      } else {
-        awaySince.current = null
-        warningActive.current = false
-        setAwaySeconds(0)
-        setWarning(false)
+      if (noFaceSince.current === null) noFaceSince.current = now
+      const elapsed = (now - noFaceSince.current) / 1000
+      setMissingFaceSeconds(elapsed)
+      // Allow brief false negatives caused by movement, lighting, or webcam quality.
+      if (elapsed < 2) return
+      setMissingFace(true)
+      if (!lastNoFaceBeepAt.current || now - lastNoFaceBeepAt.current >= 5000) {
+        lastNoFaceBeepAt.current = now
+        playWarningTone(alertAudioRef.current)
       }
     }
 
@@ -449,32 +324,21 @@ export function useLocalFaceProctor({
       const headerVideo = headerVideoElement.current
       if (headerVideo && headerVideo.srcObject === stream)
         headerVideo.srcObject = null
-      awaySince.current = null
-      warningActive.current = false
+      noFaceSince.current = null
       setActive(false)
     }
   }, [
     enabled,
     frameIntervalMs,
-    lock,
-    lockoutThresholdSeconds,
-    maxWarnings,
     retryCount,
-    warningThresholdSeconds,
   ])
 
   return {
     active,
-    ready:
-      active && faceCount === 1 && centered === true && identityReady && identityMatch === true && !lookingAway && !error,
-    warning,
-    warningCount,
-    awaySeconds,
+    ready: active && faceCount !== null && !error,
+    missingFace,
+    missingFaceSeconds,
     faceCount,
-    centered,
-    identityReady,
-    identityMatch,
-    lookingAway,
     error,
     videoRef,
     headerVideoRef,

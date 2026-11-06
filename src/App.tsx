@@ -1000,7 +1000,7 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
                   <th>EXAMINATION</th>
                   <th>OBJECTIVE</th>
                   <th>THEORY</th>
-                  <th>PROCTORING</th>
+                  <th>FACE CHECK</th>
                   <th>SUBMITTED</th>
                   <th>STATUS</th>
                 </tr>
@@ -1044,14 +1044,8 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
                       />
                     </td>
                     <td>
-                      <strong>
-                        {attempt.warnings} warning
-                        {attempt.warnings === 1 ? "" : "s"}
-                      </strong>
-                      <small className="td-sub">
-                        {attempt.reshuffleCount} reshuffle
-                        {attempt.reshuffleCount === 1 ? "" : "s"}
-                      </small>
+                      <strong>Presence reminder</strong>
+                      <small className="td-sub">No face detection lockouts</small>
                     </td>
                     <td>{new Date(attempt.submittedAt).toLocaleString()}</td>
                     <td>
@@ -1497,12 +1491,12 @@ function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
           <span className="settings-icon green"><UiIcon name="shield" /></span>
           <h2>Candidate protection</h2>
           <p>
-            Camera checks help keep each examination fair. Candidates are
-            clearly warned before an examination is locked.
+            The local camera check gives a brief beep only when no face is
+            detected. Face detection never locks or submits an examination.
           </p>
           <div className="config-status">
             <i className="configured" />
-            Protection is ready
+            Face presence reminders are ready
           </div>
         </div>
         <div className="panel settings-card">
@@ -1543,10 +1537,6 @@ function CreateExamModal({
     initialExam ? dateInput(new Date(initialExam.endTime)) : dateInput(new Date(Date.now() + 3 * 60 * 60_000)),
   )
   const [duration, setDuration] = useState(initialExam?.durationMinutes || 60)
-  const [warningSecs, setWarningSecs] = useState(initialExam?.lookAwayWarningSecs || 3)
-  const [lockoutSecs, setLockoutSecs] = useState(initialExam?.lockoutThresholdSecs || 7)
-  const [maxWarnings, setMaxWarnings] = useState(initialExam?.maxWarnings || 3)
-  const [maxRetries, setMaxRetries] = useState(initialExam?.maxRetries || 2)
   const [maxAttempts, setMaxAttempts] = useState(initialExam?.maxAttempts || 1)
   const [gradeBands, setGradeBands] = useState<GradeBand[]>(
     initialExam?.gradeBands || defaultGradeBands,
@@ -1723,10 +1713,10 @@ function CreateExamModal({
         startTime: new Date(startTime).toISOString(),
         endTime: new Date(endTime).toISOString(),
         durationMinutes: duration,
-        lookAwayWarningSecs: warningSecs,
-        lockoutThresholdSecs: lockoutSecs,
-        maxWarnings,
-        maxRetries,
+        lookAwayWarningSecs: 0,
+        lockoutThresholdSecs: 0,
+        maxWarnings: 0,
+        maxRetries: 0,
         maxAttempts,
         gradeBands,
         assignedClassIds: selectedClassIds,
@@ -1867,57 +1857,12 @@ function CreateExamModal({
               </section>
               <div className="section-divider">
                 <div>
-                  <strong>Anti-cheat thresholds</strong>
-                  <small>
-                    Applied during the student’s local camera checks.
-                  </small>
+                  <strong>Camera supervision</strong>
+                  <small>Local camera check uses a gentle face-presence reminder.</small>
                 </div>
               </div>
-              <div className="form-grid four">
-                <Field label="Look-away warning (sec)">
-                  <input
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={warningSecs}
-                    onChange={(event) =>
-                      setWarningSecs(Number(event.target.value))
-                    }
-                  />
-                </Field>
-                <Field label="Lockout after (sec)">
-                  <input
-                    type="number"
-                    min={2}
-                    max={120}
-                    value={lockoutSecs}
-                    onChange={(event) =>
-                      setLockoutSecs(Number(event.target.value))
-                    }
-                  />
-                </Field>
-                <Field label="Maximum warnings">
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={maxWarnings}
-                    onChange={(event) =>
-                      setMaxWarnings(Number(event.target.value))
-                    }
-                  />
-                </Field>
-                <Field label="Re-entry retries">
-                  <input
-                    type="number"
-                    min={0}
-                    max={10}
-                    value={maxRetries}
-                    onChange={(event) =>
-                      setMaxRetries(Number(event.target.value))
-                    }
-                  />
-                </Field>
+              <div className="ai-answer-notice">
+                Students can move naturally and look down to write. If the camera cannot detect a face for about two seconds, it plays a brief beep every few seconds. Face detection never locks or submits an exam.
               </div>
               <div className="form-grid">
                 <Field label="Allowed attempts per candidate">
