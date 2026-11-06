@@ -1,6 +1,6 @@
-import { neon } from "@neondatabase/serverless"
+import { neon, type NeonQueryFunction } from "@neondatabase/serverless"
 
-type Sql = ReturnType<typeof neon>
+type Sql = NeonQueryFunction<false, false>
 type VersionedDocument<T> = { payload: T; revision: string | number }
 
 const tableName = "exam_portal_documents"
@@ -22,7 +22,7 @@ function databaseClient() {
   }
   if (!sqlClient || sqlClientUrl !== url) {
     sqlClientUrl = url
-    sqlClient = neon(url)
+    sqlClient = neon<false, false>(url)
     schemaReady = undefined
   }
   return sqlClient

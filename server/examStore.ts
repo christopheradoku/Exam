@@ -43,7 +43,7 @@ export async function getExam(id: string): Promise<PortalExam | undefined> {
 }
 
 export async function saveExam(exam: PortalExam): Promise<void> {
-  await updatePortalDocument("exams", [], (exams) => {
+  await updatePortalDocument<PortalExam[], void>("exams", [], (exams) => {
     const index = exams.findIndex((item) => item.id === exam.id)
     if (index < 0) exams.push(exam)
     else exams[index] = exam
@@ -55,7 +55,7 @@ export async function saveExam(exam: PortalExam): Promise<void> {
 }
 
 export async function replaceExams(exams: PortalExam[]): Promise<void> {
-  await updatePortalDocument("exams", [], (stored) => {
+  await updatePortalDocument<PortalExam[], void>("exams", [], (stored) => {
     stored.length = 0
     for (const exam of exams) stored.push(exam)
   }, () => updateLocalExams((stored) => {
