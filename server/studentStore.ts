@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import type { StudentClass, StudentStatus } from "../src/lib/studentTypes"
+import { readPortalDocument, updatePortalDocument } from "./portalDocumentStore"
 
 export type StudentRecord = {
   id: string
@@ -36,38 +37,49 @@ const dataDir = path.join(process.cwd(), "data")
 const dataFile = path.join(dataDir, "students.json")
 let writeChain: Promise<void> = Promise.resolve()
 
-async function readStore(): Promise<StudentStore> {
+const emptyStore = (): StudentStore => ({ students: [], sessions: [], classes: [] })
+
+function normalizeStore(value: Partial<StudentStore>): StudentStore {
+  const store: StudentStore = {
+    students: Array.isArray(value.students) ? value.students : [],
+    sessions: Array.isArray(value.sessions) ? value.sessions : [],
+    classes: Array.isArray(value.classes) ? value.classes : [],
+  }
+  for (const student of store.students) {
+    let studentClass = store.classes.find((item) => item.id === student.classId)
+    if (!studentClass && student.className?.trim()) {
+      studentClass = store.classes.find(
+        (item) => item.name.toLowerCase() === student.className.trim().toLowerCase(),
+      )
+      if (!studentClass) {
+        studentClass = {
+          id: randomUUID(),
+          name: student.className.trim(),
+          createdAt: student.createdAt || new Date().toISOString(),
+        }
+        store.classes.push(studentClass)
+      }
+      student.classId = studentClass.id
+    }
+    if (studentClass) student.className = studentClass.name
+  }
+  return store
+}
+
+async function readLocalStore(): Promise<StudentStore> {
   try {
     const value = JSON.parse(await readFile(dataFile, "utf8")) as Partial<StudentStore>
-    const store: StudentStore = {
-      students: Array.isArray(value.students) ? value.students : [],
-      sessions: Array.isArray(value.sessions) ? value.sessions : [],
-      classes: Array.isArray(value.classes) ? value.classes : [],
-    }
-    for (const student of store.students) {
-      let studentClass = store.classes.find((item) => item.id === student.classId)
-      if (!studentClass && student.className?.trim()) {
-        studentClass = store.classes.find(
-          (item) => item.name.toLowerCase() === student.className.trim().toLowerCase(),
-        )
-        if (!studentClass) {
-          studentClass = {
-            id: randomUUID(),
-            name: student.className.trim(),
-            createdAt: student.createdAt || new Date().toISOString(),
-          }
-          store.classes.push(studentClass)
-        }
-        student.classId = studentClass.id
-      }
-      if (studentClass) student.className = studentClass.name
-    }
-    return store
+    return normalizeStore(value)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return { students: [], sessions: [], classes: [] }
+      return emptyStore()
     throw error
   }
+}
+
+async function readStore(): Promise<StudentStore> {
+  const stored = await readPortalDocument("students", emptyStore(), readLocalStore)
+  return normalizeStore(stored)
 }
 
 async function writeStore(store: StudentStore) {
@@ -85,14 +97,24 @@ export async function getStudentStore(): Promise<StudentStore> {
 export async function updateStudentStore<T>(
   update: (store: StudentStore) => T | Promise<T>,
 ): Promise<T> {
-  const operation = writeChain.then(async () => {
-    const store = await readStore()
+  const applyUpdate = async (stored: StudentStore) => {
+    const store = normalizeStore(stored)
     const result = await update(store)
-    await writeStore(store)
+    stored.students = store.students
+    stored.sessions = store.sessions
+    stored.classes = store.classes
     return result
+  }
+  return updatePortalDocument("students", emptyStore(), applyUpdate, async () => {
+    const operation = writeChain.then(async () => {
+      const store = await readLocalStore()
+      const result = await update(store)
+      await writeStore(store)
+      return result
+    })
+    writeChain = operation.then(() => undefined, () => undefined)
+    return operation
   })
-  writeChain = operation.then(() => undefined, () => undefined)
-  return operation
 }
 
 export function normalizeStudentNumber(value: string) {
