@@ -701,6 +701,18 @@ export default function StudentExam({ examId }: { examId: string }) {
   const setAnswer = (id: string, value: string) =>
     setAnswers((current) => ({ ...current, [id]: value }))
 
+  const totalQuestionCount =
+    (exam?.questions.paper1.length || 0) + (exam?.questions.paper2.length || 0)
+  const answeredQuestionCount = exam
+    ? [...exam.questions.paper1, ...exam.questions.paper2].filter(
+        (question) => answers[question.id]?.trim(),
+      ).length
+    : 0
+  const answerProgress =
+    totalQuestionCount > 0
+      ? Math.round((answeredQuestionCount / totalQuestionCount) * 100)
+      : 0
+
   const totalScore =
     (attempt?.objectiveScore || 0) +
     (attempt?.theoryMax !== undefined ? attempt.theoryScore || 0 : 0)
@@ -1190,16 +1202,21 @@ export default function StudentExam({ examId }: { examId: string }) {
       </header>
       <div className="student-progress">
         <span>EXAMINATION IN PROGRESS</span>
-        <div>
+        <div
+          role="progressbar"
+          aria-label="Exam questions answered"
+          aria-valuemin={0}
+          aria-valuemax={totalQuestionCount}
+          aria-valuenow={answeredQuestionCount}
+        >
           <i
             style={{
-              width: `${Math.max(0, Math.min(100, (Object.keys(answers).length / Math.max(1, exam.questions.paper1.length + exam.questions.paper2.length)) * 100))}%`,
+              width: `${answerProgress}%`,
             }}
           />
         </div>
         <small>
-          {Object.keys(answers).length} of{" "}
-          {exam.questions.paper1.length + exam.questions.paper2.length}{" "}
+          {answeredQuestionCount} of {totalQuestionCount}{" "}
           questions answered
         </small>
       </div>
