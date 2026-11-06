@@ -5,6 +5,7 @@ import type { FormEvent } from "react"
 import { useLocalFaceProctor } from "./hooks/useLocalFaceProctor"
 import type { ObjectiveQuestion, TheoryPart } from "./lib/examTypes"
 import { defaultGradeBands, type GradeBand } from "./lib/portalTypes"
+import type { StudentProfile } from "./lib/studentTypes"
 
 type StudentExamData = {
   id: string
@@ -29,6 +30,24 @@ function percentageGrade(score: number, maximum: number, bands: GradeBand[]) {
   return bands.find(
     (band) => percentage >= band.minimum && percentage <= band.maximum,
   )?.label || null
+}
+
+function gradeToneFor(grade: string | null, percentage: number) {
+  const gradeLetter = grade?.trim().toUpperCase().match(/^([A-F])(?:\d|$)/)?.[1]
+  if (gradeLetter === "A" || gradeLetter === "B") return "high"
+  if (gradeLetter === "C" || gradeLetter === "D") return "middle"
+  if (gradeLetter === "E" || gradeLetter === "F") return "low"
+  return percentage >= 70 ? "high" : percentage >= 50 ? "middle" : "low"
+}
+
+function gradeRecommendation(grade: string | null, tone: string) {
+  if (grade?.trim().toUpperCase().startsWith("A"))
+    return "Excellent work. Keep practising to maintain this standard."
+  if (tone === "high")
+    return "Strong result. Review missed questions to reach the top grade band."
+  if (tone === "middle")
+    return "Good progress. Review missed topics and practise them before your next test."
+  return "This result needs improvement. Revisit the core topics and ask your teacher for support."
 }
 type Attempt = {
   id: string
@@ -63,7 +82,6 @@ async function compressHandwrittenPhoto(file: File) {
 
 async function verifyStudentAccess(
   examId: string,
-  details: { accessCode: string; candidateName: string; candidateNumber: string },
   action: "enter" | "start" = "enter",
 ) {
   const controller = new AbortController()
@@ -72,7 +90,7 @@ async function verifyStudentAccess(
     const response = await fetch(`/api/student/exams/${examId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, ...details }),
+      body: JSON.stringify({ action }),
       signal: controller.signal,
     })
     return { response, body: await response.json() }
@@ -235,9 +253,11 @@ function TheoryResponse({
 }
 
 export default function StudentExam({ examId }: { examId: string }) {
-  const [accessCode, setAccessCode] = useState("")
   const [candidateName, setCandidateName] = useState("")
   const [candidateNumber, setCandidateNumber] = useState("")
+  const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(null)
+  const [identityReady, setIdentityReady] = useState(false)
+  const [identityError, setIdentityError] = useState("")
   const [exam, setExam] = useState<StudentExamData | null>(null)
   const [screen, setScreen] = useState<Screen>("gate")
   const [gate, setGate] = useState<"early" | "closed" | "">("")
@@ -257,7 +277,7 @@ export default function StudentExam({ examId }: { examId: string }) {
   const [reshuffleCount, setReshuffleCount] = useState(0)
   const [shuffleSeed, setShuffleSeed] = useState<string | undefined>()
   const [isMobilePhone, setIsMobilePhone] = useState(false)
-  const answerKey = `wassce-answers-${examId}`
+  const answerKey = `wassce-answers-${examId}-${studentProfile?.id || "unverified"}`
   const formRef = useRef<HTMLFormElement>(null)
   const autoSubmitTriggeredRef = useRef(false)
   const autoSubmitRef = useRef<(reason: string) => void>(() => undefined)
@@ -265,7 +285,6 @@ export default function StudentExam({ examId }: { examId: string }) {
   const photoUploadDeadlineAt = useRef(0)
   const liveSession = useRef({
     exam: null as StudentExamData | null,
-    accessCode: "",
     candidateName: "",
     candidateNumber: "",
     answers: {} as Record<string, string>,
@@ -275,7 +294,6 @@ export default function StudentExam({ examId }: { examId: string }) {
   })
   liveSession.current = {
     exam,
-    accessCode,
     candidateName,
     candidateNumber,
     answers,
@@ -283,6 +301,36 @@ export default function StudentExam({ examId }: { examId: string }) {
     reshuffleCount,
     shuffleSeed,
   }
+
+  useEffect(() => {
+    let mounted = true
+    fetch("/api/student-auth/session", { cache: "no-store" })
+      .then(async (response) => {
+        const body = await response.json()
+        if (!mounted) return
+        const student = body.student as StudentProfile | null
+        if (!response.ok || !body.authenticated || !student) {
+          const next = encodeURIComponent(`/exam/${examId}`)
+          window.location.replace(`/student?next=${next}`)
+          return
+        }
+        if (student.mustChangePassword) {
+          window.location.replace("/student")
+          return
+        }
+        setStudentProfile(student)
+        setCandidateName(student.fullName)
+        setCandidateNumber(student.waecCandidateNumber || student.studentNumber)
+        setIdentityReady(true)
+      })
+      .catch(() => {
+        if (!mounted) return
+        setIdentityError("Could not verify your student session. Return to the student portal and sign in again.")
+        setIdentityReady(true)
+      })
+    return () => { mounted = false }
+  }, [examId])
+
   const loggedOut = useCallback(
     async (reason: string, currentWarnings: number) => {
       setProctorOn(false)
@@ -295,9 +343,6 @@ export default function StudentExam({ examId }: { examId: string }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "lockout",
-              accessCode: current.accessCode,
-              candidateName: current.candidateName,
-              candidateNumber: current.candidateNumber,
               answers: current.answers,
               warnings: current.warnings + currentWarnings,
               reshuffleCount: current.reshuffleCount,
@@ -343,15 +388,41 @@ export default function StudentExam({ examId }: { examId: string }) {
     const onPageHide = () => autoSubmit("The exam page was left")
     const onBeforeUnload = () => autoSubmit("The exam page was closed or refreshed")
     const onWindowBlur = () => autoSubmit("The exam window lost focus")
+    const preventClipboardAction = (event: Event) => event.preventDefault()
+    const preventClipboardShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase()
+      const modifier = event.ctrlKey || event.metaKey
+      if (
+        (modifier && ["a", "c", "x", "v"].includes(key)) ||
+        ((event.shiftKey || event.ctrlKey) && key === "insert") ||
+        (event.shiftKey && key === "delete")
+      ) {
+        event.preventDefault()
+      }
+    }
 
     document.addEventListener("visibilitychange", onVisibilityChange)
     document.addEventListener("fullscreenchange", onFullscreenChange)
+    document.addEventListener("copy", preventClipboardAction, true)
+    document.addEventListener("cut", preventClipboardAction, true)
+    document.addEventListener("paste", preventClipboardAction, true)
+    document.addEventListener("selectstart", preventClipboardAction, true)
+    document.addEventListener("contextmenu", preventClipboardAction, true)
+    document.addEventListener("dragstart", preventClipboardAction, true)
+    document.addEventListener("keydown", preventClipboardShortcut, true)
     window.addEventListener("pagehide", onPageHide)
     window.addEventListener("beforeunload", onBeforeUnload)
     window.addEventListener("blur", onWindowBlur)
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange)
       document.removeEventListener("fullscreenchange", onFullscreenChange)
+      document.removeEventListener("copy", preventClipboardAction, true)
+      document.removeEventListener("cut", preventClipboardAction, true)
+      document.removeEventListener("paste", preventClipboardAction, true)
+      document.removeEventListener("selectstart", preventClipboardAction, true)
+      document.removeEventListener("contextmenu", preventClipboardAction, true)
+      document.removeEventListener("dragstart", preventClipboardAction, true)
+      document.removeEventListener("keydown", preventClipboardShortcut, true)
       window.removeEventListener("pagehide", onPageHide)
       window.removeEventListener("beforeunload", onBeforeUnload)
       window.removeEventListener("blur", onWindowBlur)
@@ -428,11 +499,7 @@ export default function StudentExam({ examId }: { examId: string }) {
     setBusy(true)
     setError("")
     try {
-      const { response, body } = await verifyStudentAccess(examId, {
-        accessCode: accessCode.trim(),
-        candidateName,
-        candidateNumber,
-      })
+      const { response, body } = await verifyStudentAccess(examId)
       if (body.gate === "early") {
         setGate("early")
         if (body.startTime)
@@ -499,11 +566,7 @@ export default function StudentExam({ examId }: { examId: string }) {
     setError("")
     try {
       await enterExamFullscreen()
-      const { response, body } = await verifyStudentAccess(examId, {
-        accessCode: accessCode.trim(),
-        candidateName,
-        candidateNumber,
-      }, "start")
+      const { response, body } = await verifyStudentAccess(examId, "start")
       if (body.gate === "early") {
         exitExamFullscreen()
         setGate("early")
@@ -574,9 +637,6 @@ export default function StudentExam({ examId }: { examId: string }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "open-photo-upload",
-            accessCode,
-            candidateName,
-            candidateNumber,
           }),
         })
         const body = await response.json()
@@ -603,9 +663,6 @@ export default function StudentExam({ examId }: { examId: string }) {
         keepalive: automatic,
         body: JSON.stringify({
           action: "submit",
-          accessCode,
-          candidateName,
-          candidateNumber,
           answers,
           photoAnswers,
           warnings: proctor.warningCount + warnings,
@@ -644,6 +701,31 @@ export default function StudentExam({ examId }: { examId: string }) {
   const setAnswer = (id: string, value: string) =>
     setAnswers((current) => ({ ...current, [id]: value }))
 
+  const totalScore =
+    (attempt?.objectiveScore || 0) +
+    (attempt?.theoryMax !== undefined ? attempt.theoryScore || 0 : 0)
+  const totalMaximum =
+    (attempt?.objectiveMax || 0) +
+    (attempt?.theoryMax !== undefined ? attempt.theoryMax : 0)
+  const overallPercentage = totalMaximum ? (totalScore / totalMaximum) * 100 : 0
+  const overallGrade = attempt
+    ? percentageGrade(totalScore, totalMaximum, exam?.gradeBands || [])
+    : null
+  const overallGradeTone = overallGrade
+    ? gradeToneFor(overallGrade, overallPercentage)
+    : "pending"
+  const theoryMarkingPending = Boolean(
+    attempt &&
+      attempt.theoryMax === undefined &&
+      exam?.questions.paper2.length,
+  )
+
+  if (!identityReady)
+    return <main className="student-page"><div className="student-gate"><Brand /><span className="eyebrow">STUDENT ACCOUNT</span><h1>Checking your sign-in</h1><p>Verifying your student session before opening the exam.</p></div></main>
+
+  if (identityError)
+    return <main className="student-page"><div className="student-gate"><Brand /><span className="eyebrow">STUDENT ACCOUNT</span><h1>Sign-in required</h1><p>{identityError}</p><a className="primary-button" href={`/student?next=${encodeURIComponent(`/exam/${examId}`)}`}>Return to student sign-in</a></div></main>
+
   if (screen === "submitted")
     return (
       <main className="student-page">
@@ -675,23 +757,15 @@ export default function StudentExam({ examId }: { examId: string }) {
             )}
           </div>
           {attempt && (
-            <div className="result-grade">
-              <small>OVERALL GRADE</small>
-              <strong>
-                {percentageGrade(
-                  (attempt.objectiveScore || 0) +
-                    (attempt.theoryMax !== undefined
-                      ? attempt.theoryScore || 0
-                      : 0),
-                  (attempt.objectiveMax || 0) +
-                    (attempt.theoryMax !== undefined ? attempt.theoryMax : 0),
-                  exam?.gradeBands || [],
-                ) || "—"}
-              </strong>
+            <div className={`result-grade grade-${overallGradeTone}`}>
+              <small>{theoryMarkingPending ? "PROVISIONAL GRADE" : "OVERALL GRADE"}</small>
+              <strong>{overallGrade || "—"}</strong>
               <span>
-                {attempt.theoryMax === undefined && exam?.questions.paper2.length
-                  ? "Pending theory marking"
-                  : "Based on your total percentage"}
+                {theoryMarkingPending
+                  ? "Paper 2 is still being marked, so this grade may change."
+                  : overallGrade
+                    ? gradeRecommendation(overallGrade, overallGradeTone)
+                    : "Your overall grade is not available yet."}
               </span>
             </div>
           )}
@@ -722,37 +796,23 @@ export default function StudentExam({ examId }: { examId: string }) {
           <h1>Session locked</h1>
           <p>
             {error ||
-              "The proctoring limit was reached. Re-enter your access code to continue."}
+              "The proctoring limit was reached. Re-enter using your student account to continue."}
           </p>
           <div className="lock-info">
             <strong>Questions will be reshuffled on re-entry.</strong>
             <small>
-              Attempts remaining are enforced for this candidate number.
+              Re-entry limits are enforced for your student account.
             </small>
           </div>
           <form onSubmit={enter} className="gate-form">
-            <label>
-              Six-character access code
-              <input
-                value={accessCode}
-                onChange={(event) =>
-                  setAccessCode(
-                    event.target.value
-                      .toUpperCase()
-                      .replace(/[^A-Z0-9]/g, "")
-                      .slice(0, 6),
-                  )
-                }
-                autoComplete="off"
-              />
-            </label>
             <button
               className="primary-button wide"
-              disabled={busy || accessCode.length !== 6}
+              disabled={busy}
             >
               {busy ? "Checking…" : "Re-enter exam →"}
             </button>
           </form>
+          <a className="student-mode-switch" href="/student">Back to student dashboard</a>
           {error && <div className="inline-error">{error}</div>}
         </section>
       </main>
@@ -919,13 +979,9 @@ export default function StudentExam({ examId }: { examId: string }) {
               <button
                 className="waiting-edit"
                 type="button"
-                onClick={() => {
-                  setScreen("gate")
-                  setGate("")
-                  setError("")
-                }}
+                onClick={() => window.location.assign("/student")}
               >
-                Change candidate details
+                Back to student dashboard
               </button>
             </div>
           </div>
@@ -946,11 +1002,11 @@ export default function StudentExam({ examId }: { examId: string }) {
               <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" />
             </svg>
           </span>
-          <span className="eyebrow">CANDIDATE EXAM ACCESS</span>
+          <span className="eyebrow">ASSIGNED EXAM ACCESS</span>
           <h1>Ready to begin?</h1>
           <p>
-            Enter your candidate details and the six-character access code
-            provided by your invigilator.
+            This examination is assigned to your student account. Confirm your
+            identity below to continue to the camera check.
           </p>
           {gate === "early" && (
             <div className="schedule-banner">
@@ -972,59 +1028,20 @@ export default function StudentExam({ examId }: { examId: string }) {
             </div>
           )}
           <form onSubmit={enter} className="gate-form">
-            <label>
-              Candidate full name
-              <input
-                value={candidateName}
-                onChange={(event) => {
-                  setCandidateName(event.target.value)
-                  setGate("")
-                }}
-                placeholder="Enter your name"
-                required
-              />
-            </label>
-            <label>
-              Candidate number
-              <input
-                value={candidateNumber}
-                onChange={(event) => {
-                  setCandidateNumber(event.target.value)
-                  setGate("")
-                }}
-                placeholder="e.g. 0240184921"
-                required
-              />
-            </label>
-            <label>
-              Six-character access code
-              <input
-                className="code-input"
-                value={accessCode}
-                onChange={(event) => {
-                  setAccessCode(
-                    event.target.value
-                      .toUpperCase()
-                      .replace(/[^A-Z0-9]/g, "")
-                      .slice(0, 6),
-                  )
-                  setGate("")
-                }}
-                placeholder="A1B2C3"
-                autoComplete="off"
-                required
-              />
-            </label>
+            <div className="preflight-candidate account-candidate">
+              <span>{candidateName.trim().slice(0, 1).toUpperCase() || "S"}</span>
+              <div><strong>{candidateName}</strong><small>Student ID · {studentProfile?.studentNumber}</small></div>
+            </div>
             {error && <div className="inline-error">{error}</div>}
             <button
               className="primary-button wide"
-              disabled={busy || accessCode.length !== 6}
+              disabled={busy || !studentProfile}
             >
-              {busy ? "Verifying access…" : "Verify & enter exam →"}
+              {busy ? "Checking assigned exam…" : "Continue to camera check →"}
             </button>
           </form>
           <div className="privacy-note">
-            After access is verified, you’ll complete a local camera check
+            After your assignment is verified, you’ll complete a local camera check
             before the exam. Camera frames stay on this device.
           </div>
         </section>
@@ -1123,7 +1140,7 @@ export default function StudentExam({ examId }: { examId: string }) {
     screen === "paper2" ? exam.questions.paper2 : exam.questions.paper1
   return (
     <main
-      className="student-exam-shell"
+      className="student-exam-shell exam-no-select"
       data-mobile-phone={isMobilePhone ? "true" : undefined}
     >
       <header className="student-exam-header">
@@ -1247,7 +1264,7 @@ export default function StudentExam({ examId }: { examId: string }) {
             <span>
               <i /> Answers are saved as you work in this session
             </span>
-            {screen === "paper1" ? (
+            {screen === "paper1" && exam.questions.paper2.length > 0 ? (
               <button
                 type="button"
                 className="primary-button"

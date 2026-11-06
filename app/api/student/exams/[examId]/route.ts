@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
+import { getStudentForRequest } from "../../../../../server/studentAuth"
 import { gradeTheoryAnswers } from "../../../../../server/groq"
 import { getExam, saveExam } from "../../../../../server/examStore"
 import type {
@@ -64,25 +65,34 @@ export async function POST(
 ) {
   const { examId } = await context.params
   const body = (await request.json().catch(() => null)) as Body | null
-  if (!body?.accessCode)
+  if (!body)
     return NextResponse.json(
-      { error: "Enter the six-character access code." },
+      { error: "Invalid exam request." },
       { status: 400 },
     )
+  if (!body.action || !["enter", "start", "submit", "lockout", "open-photo-upload"].includes(body.action))
+    return NextResponse.json({ error: "Unsupported exam action." }, { status: 400 })
+  const student = await getStudentForRequest(request)
+  if (!student)
+    return NextResponse.json({ error: "Sign in to your student account first." }, { status: 401 })
   const exam = await getExam(examId)
   if (!exam)
     return NextResponse.json({ error: "Exam not found." }, { status: 404 })
-  if (body.accessCode.toUpperCase() !== exam.accessCode.toUpperCase())
-    return NextResponse.json({ error: "Access code is not correct." }, {
-      status: 401,
-    })
+  if (!student.assignedExamIds.includes(examId))
+    return NextResponse.json({ error: "This examination has not been assigned to your account." }, { status: 403 })
+  const belongsToStudent = (attempt: ExamAttempt) =>
+    attempt.studentId === student.id ||
+    (!attempt.studentId &&
+      (attempt.candidateNumber === student.studentNumber ||
+        (!!student.waecCandidateNumber && attempt.candidateNumber === student.waecCandidateNumber)))
+  const candidateNumber = student.waecCandidateNumber || student.studentNumber
   if (body.action === "open-photo-upload") {
     const duration = Math.min(30, Math.max(0, exam.photoUploadWindowMinutes || 0))
     const allowedIds = new Set(exam.questions.paper2.filter((question) => question.allowPhotoUpload).map((question) => question.id))
     if (!duration || !allowedIds.size)
       return NextResponse.json({ error: "This exam has no handwritten photo answers enabled." }, { status: 400 })
-    const key = body.candidateNumber?.trim() || "anonymous"
-    if (exam.attempts.some((attempt) => attempt.candidateNumber === key && (attempt.status === "submitted" || attempt.status === "graded")))
+    const key = student.id
+    if (exam.attempts.some((attempt) => belongsToStudent(attempt) && (attempt.status === "submitted" || attempt.status === "graded")))
       return NextResponse.json({ error: "This candidate has already submitted this examination." }, { status: 403 })
     const examStart = exam.candidateStartTimes?.[key]
     if (!examStart)
@@ -128,10 +138,9 @@ export async function POST(
     return NextResponse.json({ gate }, { status: 403 })
 
   if (body.action === "enter" || body.action === "start") {
-    const candidateNumber = body.candidateNumber?.trim() || "anonymous"
     const completedAttempts = exam.attempts.filter(
       (attempt) =>
-        attempt.candidateNumber === candidateNumber &&
+        belongsToStudent(attempt) &&
         (attempt.status === "submitted" || attempt.status === "graded"),
     ).length
     if (completedAttempts >= (exam.maxAttempts ?? 1))
@@ -142,7 +151,7 @@ export async function POST(
     const priorLocks = exam.attempts.filter(
       (attempt) =>
         attempt.status === "locked" &&
-        attempt.candidateNumber === candidateNumber,
+        belongsToStudent(attempt),
     )
     if (priorLocks.length > exam.maxRetries)
       return NextResponse.json(
@@ -158,7 +167,7 @@ export async function POST(
         ...exam.attempts
           .filter(
             (attempt) =>
-              attempt.candidateNumber === candidateNumber &&
+              belongsToStudent(attempt) &&
               attempt.shuffleSeed,
           )
           .map((attempt) => attempt.shuffleSeed!),
@@ -171,7 +180,7 @@ export async function POST(
     }
     let deadlineAt: string | undefined
     if (body.action === "start") {
-      const key = body.candidateNumber?.trim() || "anonymous"
+      const key = student.id
       exam.candidateStartTimes ||= {}
       const start = exam.candidateStartTimes[key]
       if (!start) {
@@ -185,21 +194,26 @@ export async function POST(
     }
     return NextResponse.json({
       gate,
-      exam: studentSafeExam(exam, questions),
+      exam: studentSafeExam(
+        exam,
+        body.action === "start" ? questions : { paper1: [], paper2: [] },
+      ),
       shuffleSeed,
       reshuffleCount: priorLocks.length,
       deadlineAt,
     })
   }
 
-  const candidateNumber = body.candidateNumber?.trim() || "anonymous"
   if (body.action === "lockout") {
-    delete exam.candidateStartTimes?.[candidateNumber]
-    delete exam.photoUploadWindows?.[candidateNumber]
+    if (!exam.candidateStartTimes?.[student.id])
+      return NextResponse.json({ error: "This exam attempt has not been started." }, { status: 403 })
+    delete exam.candidateStartTimes?.[student.id]
+    delete exam.photoUploadWindows?.[student.id]
   }
   const attempt: ExamAttempt = {
     id: randomUUID(),
-    candidateName: body.candidateName?.trim() || "Candidate",
+    studentId: student.id,
+    candidateName: student.fullName,
     candidateNumber,
     submittedAt: new Date().toISOString(),
     objectiveScore: 0,
@@ -214,12 +228,14 @@ export async function POST(
     answers: body.answers || {},
   }
   if (body.action === "submit") {
-    if (exam.attempts.some((attempt) => attempt.candidateNumber === candidateNumber && (attempt.status === "submitted" || attempt.status === "graded")))
+    if (!exam.candidateStartTimes?.[student.id])
+      return NextResponse.json({ error: "Start the assigned exam before submitting it." }, { status: 403 })
+    if (exam.attempts.some((attempt) => belongsToStudent(attempt) && (attempt.status === "submitted" || attempt.status === "graded")))
       return NextResponse.json({ error: "This candidate has already submitted this examination." }, { status: 403 })
     const allowedPhotoIds = new Set(exam.questions.paper2.filter((question) => question.allowPhotoUpload).map((question) => question.id))
     const photos = body.photoAnswers || {}
     const hasPhotoFeature = allowedPhotoIds.size > 0 && (exam.photoUploadWindowMinutes || 0) > 0
-    const uploadWindow = exam.photoUploadWindows?.[candidateNumber]
+    const uploadWindow = exam.photoUploadWindows?.[student.id]
     if (hasPhotoFeature && (!uploadWindow || Date.now() > Date.parse(uploadWindow.closesAt) + 30_000))
       return NextResponse.json({ error: "The handwritten answer upload window is missing or has expired." }, { status: 403 })
     for (const [questionId, dataUrl] of Object.entries(photos)) {

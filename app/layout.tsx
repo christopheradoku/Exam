@@ -3,7 +3,7 @@ import "../src/index.css"
 
 export const metadata: Metadata = {
   title: "Virtual Exam | Secure Examination Portal",
-  description: "Teacher dashboard for secure virtual examinations, proctoring, and grading.",
+  description: "Student accounts, assigned examinations, proctoring, and teacher grading in one secure portal.",
 }
 
 export const viewport: Viewport = {

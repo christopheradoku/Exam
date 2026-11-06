@@ -17,6 +17,7 @@ export const defaultGradeBands: GradeBand[] = [
 
 export type ExamAttempt = {
   id: string
+  studentId?: string
   candidateName: string
   candidateNumber: string
   submittedAt: string

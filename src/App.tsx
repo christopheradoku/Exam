@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import type { FormEvent } from "react"
 import type { ObjectiveQuestion, TheoryPart } from "./lib/examTypes"
 import { defaultGradeBands, type ExamAttempt, type GradeBand, type PortalExam } from "./lib/portalTypes"
+import type { StudentClass, StudentProfile } from "./lib/studentTypes"
 
-type View = "overview" | "exams" | "results" | "settings"
+type View = "overview" | "exams" | "students" | "results" | "settings"
 type Parsed = {
   paper1: ObjectiveQuestion[]
   paper2: TheoryPart[]
@@ -33,6 +34,7 @@ type IconName =
 const navItems: { id: View; label: string; icon: IconName }[] = [
   { id: "overview", label: "Overview", icon: "home" },
   { id: "exams", label: "Examinations", icon: "exam" },
+  { id: "students", label: "Students", icon: "users" },
   { id: "results", label: "Results", icon: "results" },
   { id: "settings", label: "Settings", icon: "settings" },
 ]
@@ -158,12 +160,29 @@ function initials(name: string) {
     .toUpperCase()
 }
 
+function adjustGradeBand(
+  bands: GradeBand[],
+  index: number,
+  field: "minimum" | "maximum",
+  rawValue: number,
+) {
+  const value = Math.max(0, Math.min(100, rawValue))
+  const next = bands.map((band) => ({ ...band }))
+  next[index][field] = value
+  if (field === "minimum" && index > 0)
+    next[index - 1].maximum = Math.min(100, value - 1)
+  if (field === "maximum" && index < next.length - 1)
+    next[index + 1].minimum = Math.max(0, value + 1)
+  return next
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [exams, setExams] = useState<PortalExam[]>([])
   const [view, setView] = useState<View>("overview")
   const [showCreate, setShowCreate] = useState(false)
   const [detailsExam, setDetailsExam] = useState<PortalExam | null>(null)
+  const [editExam, setEditExam] = useState<PortalExam | null>(null)
   const [password, setPassword] = useState("")
   const [loginError, setLoginError] = useState("")
   const [toast, setToast] = useState("")
@@ -270,7 +289,21 @@ export default function App() {
     setShowCreate(false)
     setView("exams")
     setDetailsExam(createdExam)
-    setToast("Exam created. Share the link and access code with candidates.")
+    setToast("Exam created. Assign it to approved students in the Students panel.")
+  }
+
+  async function saveEditedExam(exam: PortalExam) {
+    const response = await fetch(`/api/exams/${exam.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(exam),
+    })
+    const body = await response.json()
+    if (!response.ok) throw new Error(body.error || "Could not update exam")
+    await loadExams()
+    setEditExam(null)
+    setDetailsExam(body.exam as PortalExam)
+    setToast("Exam updated successfully.")
   }
 
   if (authenticated === null)
@@ -298,7 +331,7 @@ export default function App() {
             </p>
             <div className="hero-points">
               <span>✓ AI assisted question parsing</span>
-              <span>✓ Timed, access-code protected exams</span>
+              <span>✓ Scheduled exams assigned to students</span>
               <span>✓ Objective and theory results</span>
             </div>
           </div>
@@ -335,6 +368,9 @@ export default function App() {
                 after 8 hours.
               </p>
             </div>
+            <a className="student-portal-link" href="/student">
+              Student? Sign in or request an account
+            </a>
           </form>
         </section>
       </main>
@@ -417,6 +453,7 @@ export default function App() {
             />
           )}
           {view === "results" && <ResultsPage exams={exams} />}
+          {view === "students" && <StudentsPage exams={exams} onToast={setToast} />}
           {view === "settings" && <SettingsPage onToast={setToast} />}
         </div>
       </main>
@@ -431,6 +468,21 @@ export default function App() {
           exam={detailsExam}
           onClose={() => setDetailsExam(null)}
           onToast={setToast}
+          onManageStudents={() => {
+            setDetailsExam(null)
+            setView("students")
+          }}
+          onEdit={() => {
+            setDetailsExam(null)
+            setEditExam(detailsExam)
+          }}
+        />
+      )}
+      {editExam && (
+        <CreateExamModal
+          initialExam={editExam}
+          onClose={() => setEditExam(null)}
+          onSave={saveEditedExam}
         />
       )}
       {toast && (
@@ -531,7 +583,7 @@ function Overview({
           <div className="panel-head">
             <div>
               <h2>Recent examinations</h2>
-              <p>Manage schedules and candidate access.</p>
+              <p>Manage schedules and student assignments.</p>
             </div>
             <button className="text-button" onClick={() => onView("exams")}>
               <span>View all <UiIcon name="chevron" /></span>
@@ -726,12 +778,9 @@ async function copyStudentLink(
     await navigator.clipboard.writeText(
       `${window.location.origin}/exam/${exam.id}`,
     )
-    onToast(`Student link copied. Access code: ${exam.accessCode}`)
+    onToast("Student exam link copied. Only students assigned this exam can open it.")
   } catch {
-    window.prompt(
-      `Copy this link. Student access code: ${exam.accessCode}`,
-      `${window.location.origin}/exam/${exam.id}`,
-    )
+    window.prompt("Copy this student exam link. Students must sign in to an assigned account.", `${window.location.origin}/exam/${exam.id}`)
   }
 }
 
@@ -739,10 +788,14 @@ function ExamDetailsModal({
   exam,
   onClose,
   onToast,
+  onManageStudents,
+  onEdit,
 }: {
   exam: PortalExam
   onClose: () => void
   onToast: (message: string) => void
+  onManageStudents: () => void
+  onEdit: () => void
 }) {
   const studentLink = `${
     typeof window === "undefined" ? "" : window.location.origin
@@ -789,17 +842,16 @@ function ExamDetailsModal({
         <div className="details-body">
           <div className="published-code">
             <div>
-              <span className="eyebrow">STUDENT ACCESS CODE</span>
+              <span className="eyebrow">STUDENT ASSIGNMENT REQUIRED</span>
               <p>
-                Give this six-character code to candidates with the exam link.
+                Assign this exam to approved student accounts in the Students panel. Sign-in and assignment checks protect the questions.
               </p>
             </div>
-            <strong>{exam.accessCode}</strong>
             <button
               className="secondary-button"
-              onClick={() => void copy(exam.accessCode, "Access code")}
+              onClick={onManageStudents}
             >
-              Copy code
+              Manage student assignments
             </button>
           </div>
           <div className="detail-field">
@@ -834,9 +886,12 @@ function ExamDetailsModal({
           </div>
         </div>
         <footer className="modal-footer">
-          <button className="text-button" onClick={onClose}>
-            Close
-          </button>
+          <div className="modal-footer-actions">
+            <button className="secondary-button" onClick={onEdit}>
+              Edit examination
+            </button>
+            <button className="text-button" onClick={onClose}>Close</button>
+          </div>
           <button
             className="primary-button"
             onClick={() =>
@@ -884,7 +939,7 @@ function ExamsPage({
         <div>
           <span className="eyebrow">EXAM MANAGEMENT</span>
           <h1>Examinations</h1>
-          <p>Create, schedule, and share candidate access.</p>
+          <p>Create examinations and assign them to your students.</p>
         </div>
         <button className="primary-button" onClick={onCreate}>
           <UiIcon name="plus" /> Create examination
@@ -1095,6 +1150,310 @@ function TheoryFeedbackDetails({
   )
 }
 
+type ManagedStudent = StudentProfile & {
+  assignedExamIds: string[]
+  createdAt: string
+}
+
+function StudentsPage({
+  exams,
+  onToast,
+}: {
+  exams: PortalExam[]
+  onToast: (message: string) => void
+}) {
+  const [students, setStudents] = useState<ManagedStudent[]>([])
+  const [classes, setClasses] = useState<StudentClass[]>([])
+  const [selectedClass, setSelectedClass] = useState("")
+  const [selectedExam, setSelectedExam] = useState("")
+  const [newClassName, setNewClassName] = useState("")
+  const [newStudent, setNewStudent] = useState({ fullName: "", studentNumber: "", waecCandidateNumber: "", classId: "" })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const [temporaryPassword, setTemporaryPassword] = useState<{
+    studentId: string
+    value: string
+  } | null>(null)
+
+  const loadStudents = useCallback(async () => {
+    const [studentsResponse, classesResponse] = await Promise.all([
+      fetch("/api/students", { cache: "no-store" }),
+      fetch("/api/classes", { cache: "no-store" }),
+    ])
+    const [studentsBody, classesBody] = await Promise.all([studentsResponse.json(), classesResponse.json()])
+    if (!studentsResponse.ok) throw new Error(studentsBody.error || "Could not load student accounts.")
+    if (!classesResponse.ok) throw new Error(classesBody.error || "Could not load classes.")
+    const accounts = studentsBody.students as ManagedStudent[]
+    setStudents(accounts.sort((left, right) => {
+      if (left.status === "pending" && right.status !== "pending") return -1
+      if (right.status === "pending" && left.status !== "pending") return 1
+      return left.fullName.localeCompare(right.fullName)
+    }))
+    setClasses(classesBody.classes as StudentClass[])
+  }, [])
+
+  useEffect(() => {
+    void loadStudents().catch((cause) =>
+      setError(cause instanceof Error ? cause.message : "Could not load student accounts."),
+    )
+    const timer = window.setInterval(() => {
+      void loadStudents().catch(() => {})
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [loadStudents])
+
+  async function updateStudent(payload: Record<string, unknown>) {
+    setBusy(true)
+    setError("")
+    try {
+      const response = await fetch("/api/students", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || "Could not update student account.")
+      if (typeof body.temporaryPassword === "string") {
+        const studentId = (body.student?.id || payload.studentId) as string | undefined
+        if (studentId) setTemporaryPassword({ studentId, value: body.temporaryPassword })
+      }
+      if (payload.action === "create")
+        setNewStudent({ fullName: "", studentNumber: "", waecCandidateNumber: "", classId: "" })
+      await loadStudents()
+      if (payload.action === "assign-class")
+        onToast(`Exam assignment updated for ${body.count} active student${body.count === 1 ? "" : "s"}.`)
+      else if (payload.action === "assign")
+        onToast(payload.assigned ? "Examination assigned to student." : "Examination removed from student.")
+      else if (payload.action === "approve") onToast("Student account approved.")
+      else if (payload.action === "reset-password") onToast("Temporary password created. Share it with the student securely.")
+      else if (payload.action === "set-status") onToast("Student account updated.")
+      else if (payload.action === "create") onToast("Student account created. Give the temporary password to the student.")
+      else if (payload.action === "edit") onToast("Student details updated.")
+      else if (payload.action === "delete") onToast(`Student account deleted; ${body.attemptsRemoved || 0} saved attempt(s) removed.`)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not update student account.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function createClass(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError("")
+    try {
+      const response = await fetch("/api/classes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create", name: newClassName }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || "Could not create class.")
+      setNewClassName("")
+      await loadStudents()
+      onToast(`Class ${body.class.name} created.`)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create class.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteClass(studentClass: StudentClass) {
+    if (!window.confirm(`Delete class “${studentClass.name}”? Classes with students cannot be deleted.`)) return
+    setBusy(true)
+    setError("")
+    try {
+      const response = await fetch("/api/classes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", id: studentClass.id }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || "Could not delete class.")
+      await loadStudents()
+      onToast("Class deleted.")
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not delete class.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function deleteStudent(student: ManagedStudent) {
+    const confirmed = window.confirm(
+      `Permanently delete ${student.fullName} (${student.studentNumber})? Their account, exam assignments, and saved attempt/results will be removed. This cannot be undone.`,
+    )
+    if (confirmed) void updateStudent({ action: "delete", studentId: student.id })
+  }
+
+  return (
+    <>
+      <div className="page-heading compact">
+        <div>
+          <span className="eyebrow">CANDIDATE ACCOUNTS</span>
+          <h1>Students</h1>
+          <p>Create classes and student accounts, approve registrations, assign exams, and manage student details.</p>
+        </div>
+        <span className="student-admin-count">{students.length} account{students.length === 1 ? "" : "s"}</span>
+      </div>
+      <section className="student-management-grid">
+        <form className="panel student-create-panel" onSubmit={createClass}>
+          <div className="panel-head"><div><h2>Classes</h2><p>Students choose from these classes when registering.</p></div></div>
+          <div className="student-create-row">
+            <label>New class name<input value={newClassName} onChange={(event) => setNewClassName(event.target.value)} placeholder="e.g. Form 3A" minLength={2} maxLength={50} required /></label>
+            <button className="primary-button" disabled={busy || !newClassName.trim()}>Add class</button>
+          </div>
+          {classes.length ? <div className="student-class-list">{classes.map((studentClass) => {
+            const memberCount = students.filter((student) => student.classId === studentClass.id).length
+            return <div className="student-class-chip" key={studentClass.id}><span><strong>{studentClass.name}</strong><small>{memberCount} student{memberCount === 1 ? "" : "s"}</small></span><button type="button" className="text-button danger-text" disabled={busy || memberCount > 0} title={memberCount ? "Move or delete the students first" : "Delete class"} onClick={() => void deleteClass(studentClass)}>Delete</button></div>
+          })}</div> : <p className="student-no-exams">No classes yet. Add a class before creating student accounts.</p>}
+        </form>
+        <form className="panel student-create-panel" onSubmit={(event) => { event.preventDefault(); void updateStudent({ action: "create", ...newStudent }) }}>
+          <div className="panel-head"><div><h2>Add a student</h2><p>Create a ready-to-use account and share its temporary password privately.</p></div></div>
+          <div className="student-add-fields">
+            <label>Student full name<input value={newStudent.fullName} onChange={(event) => setNewStudent((current) => ({ ...current, fullName: event.target.value }))} autoComplete="name" minLength={3} maxLength={100} required /></label>
+            <label>School Student ID<input value={newStudent.studentNumber} onChange={(event) => setNewStudent((current) => ({ ...current, studentNumber: event.target.value }))} autoComplete="off" minLength={2} maxLength={32} required /></label>
+            <label>Class<select value={newStudent.classId} onChange={(event) => setNewStudent((current) => ({ ...current, classId: event.target.value }))} required><option value="">Select class</option>{classes.map((studentClass) => <option value={studentClass.id} key={studentClass.id}>{studentClass.name}</option>)}</select></label>
+            <label>WAEC candidate number <span className="optional-label">Optional</span><input value={newStudent.waecCandidateNumber} onChange={(event) => setNewStudent((current) => ({ ...current, waecCandidateNumber: event.target.value }))} maxLength={32} /></label>
+          </div>
+          <button className="primary-button" disabled={busy || !classes.length}>Create student account</button>
+          {!classes.length && <small className="student-form-help">Add a class first so the account can be assigned to it.</small>}
+        </form>
+      </section>
+      <section className="panel student-allocation-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Assign an exam to a class</h2>
+            <p>Only approved students in the selected class receive the assignment.</p>
+          </div>
+        </div>
+        <div className="student-allocation-controls">
+          <label>
+            Class
+            <select value={selectedClass} onChange={(event) => setSelectedClass(event.target.value)}>
+              <option value="">Select a class</option>
+              {classes.map((studentClass) => <option key={studentClass.id} value={studentClass.id}>{studentClass.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Examination
+            <select value={selectedExam} onChange={(event) => setSelectedExam(event.target.value)}>
+              <option value="">Select an examination</option>
+              {exams.map((exam) => <option key={exam.id} value={exam.id}>{exam.title} · {exam.subject}</option>)}
+            </select>
+          </label>
+          <button
+            className="primary-button"
+            disabled={busy || !selectedClass || !selectedExam}
+            onClick={() => void updateStudent({ action: "assign-class", classId: selectedClass, examId: selectedExam, assigned: true })}
+          >
+            Assign to class
+          </button>
+        </div>
+      </section>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      {!students.length ? (
+        <section className="panel empty-state student-empty-state">
+          <span className="empty-illustration"><UiIcon name="users" /></span>
+          <strong>No student registrations yet</strong>
+          <p>Create a class and add student accounts here, or let students request access through the registration page.</p>
+          <a className="secondary-button" href="/student">Open student registration</a>
+        </section>
+      ) : (
+        <section className="student-admin-list">
+          {students.map((student) => (
+            <article className="panel student-admin-card" key={student.id}>
+              <div className="student-admin-main">
+                <span className="student-admin-avatar">{initials(student.fullName)}</span>
+                <div className="student-admin-name">
+                  <strong>{student.fullName}</strong>
+                  <span>{student.studentNumber} · {student.className}</span>
+                  {student.waecCandidateNumber && <small>WAEC no. {student.waecCandidateNumber}</small>}
+                </div>
+                <span className={`status ${student.status === "active" ? "status-live" : student.status === "pending" ? "status-scheduled" : "status-locked"}`}>
+                  {student.status}
+                </span>
+              </div>
+              <div className="student-admin-actions">
+                {student.status === "pending" ? (
+                  <button className="primary-button" disabled={busy} onClick={() => void updateStudent({ action: "approve", studentId: student.id })}>Approve</button>
+                ) : (
+                  <>
+                    <button className="secondary-button" disabled={busy} onClick={() => void updateStudent({ action: "set-status", studentId: student.id, status: student.status === "active" ? "disabled" : "active" })}>
+                      {student.status === "active" ? "Disable" : "Activate"}
+                    </button>
+                    <button className="secondary-button" disabled={busy} onClick={() => void updateStudent({ action: "reset-password", studentId: student.id })}>Reset password</button>
+                  </>
+                )}
+              </div>
+              {temporaryPassword?.studentId === student.id && (
+                <div className="student-temp-password">
+                  <span>Temporary password · <strong>{temporaryPassword.value}</strong> · student must change it after sign-in</span>
+                  <button className="text-button" onClick={() => void navigator.clipboard.writeText(temporaryPassword.value).then(() => onToast("Temporary password copied."))}>Copy</button>
+                </div>
+              )}
+              <details className="student-edit-details">
+                <summary>Edit student details</summary>
+                <StudentEditForm student={student} classes={classes} busy={busy} onSave={(changes) => void updateStudent({ action: "edit", studentId: student.id, ...changes })} />
+              </details>
+              <div className="student-admin-danger"><button className="text-button danger-text" disabled={busy} onClick={() => deleteStudent(student)}>Delete student and records</button></div>
+              {student.status === "active" && (
+                <details className="student-assignment-details">
+                  <summary>Assigned examinations <span>{student.assignedExamIds.length}</span></summary>
+                  {exams.length ? (
+                    <div className="student-assignment-options">
+                      {exams.map((exam) => (
+                        <label key={exam.id}>
+                          <input
+                            type="checkbox"
+                            checked={student.assignedExamIds.includes(exam.id)}
+                            disabled={busy}
+                            onChange={(event) => void updateStudent({ action: "assign", studentId: student.id, examId: exam.id, assigned: event.target.checked })}
+                          />
+                          <span><strong>{exam.title}</strong><small>{exam.subject} · {new Date(exam.startTime).toLocaleString()}</small></span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : <p className="student-no-exams">Create an examination before assigning one.</p>}
+                </details>
+              )}
+            </article>
+          ))}
+        </section>
+      )}
+    </>
+  )
+}
+
+function StudentEditForm({
+  student,
+  classes,
+  busy,
+  onSave,
+}: {
+  student: ManagedStudent
+  classes: StudentClass[]
+  busy: boolean
+  onSave: (changes: { fullName: string; studentNumber: string; waecCandidateNumber: string; classId: string }) => void
+}) {
+  const [draft, setDraft] = useState({
+    fullName: student.fullName,
+    studentNumber: student.studentNumber,
+    waecCandidateNumber: student.waecCandidateNumber || "",
+    classId: student.classId,
+  })
+  return (
+    <form className="student-edit-form" onSubmit={(event) => { event.preventDefault(); onSave(draft) }}>
+      <label>Full name<input value={draft.fullName} onChange={(event) => setDraft((current) => ({ ...current, fullName: event.target.value }))} minLength={3} maxLength={100} required /></label>
+      <label>Student ID<input value={draft.studentNumber} onChange={(event) => setDraft((current) => ({ ...current, studentNumber: event.target.value }))} minLength={2} maxLength={32} required /></label>
+      <label>Class<select value={draft.classId} onChange={(event) => setDraft((current) => ({ ...current, classId: event.target.value }))} required><option value="">Select class</option>{classes.map((studentClass) => <option value={studentClass.id} key={studentClass.id}>{studentClass.name}</option>)}</select></label>
+      <label>WAEC candidate number<input value={draft.waecCandidateNumber} onChange={(event) => setDraft((current) => ({ ...current, waecCandidateNumber: event.target.value }))} maxLength={32} /></label>
+      <button className="secondary-button" disabled={busy}>Save student details</button>
+    </form>
+  )
+}
+
 function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
   return (
     <>
@@ -1138,8 +1497,8 @@ function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
           <span className="settings-icon purple"><UiIcon name="users" /></span>
           <h2>Candidate experience</h2>
           <p>
-            Share a simple exam link and access code. Candidates see only the
-            questions and instructions they need to complete their work.
+            Students sign in with their school ID and see only the examinations
+            assigned to their account.
           </p>
           <div className="config-status">
             <i className="configured" />
@@ -1154,32 +1513,38 @@ function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
 function CreateExamModal({
   onClose,
   onSave,
+  initialExam,
 }: {
   onClose: () => void
   onSave: (exam: PortalExam) => Promise<void>
+  initialExam?: PortalExam
 }) {
-  const [title, setTitle] = useState("")
-  const [subject, setSubject] = useState("")
+  const [title, setTitle] = useState(initialExam?.title || "")
+  const [subject, setSubject] = useState(initialExam?.subject || "")
   const [startTime, setStartTime] = useState(() =>
-    dateInput(new Date(Date.now() + 5 * 60_000)),
+    initialExam ? dateInput(new Date(initialExam.startTime)) : dateInput(new Date(Date.now() + 5 * 60_000)),
   )
   const [endTime, setEndTime] = useState(() =>
-    dateInput(new Date(Date.now() + 3 * 60 * 60_000)),
+    initialExam ? dateInput(new Date(initialExam.endTime)) : dateInput(new Date(Date.now() + 3 * 60 * 60_000)),
   )
-  const [duration, setDuration] = useState(60)
-  const [warningSecs, setWarningSecs] = useState(3)
-  const [lockoutSecs, setLockoutSecs] = useState(7)
-  const [maxWarnings, setMaxWarnings] = useState(3)
-  const [maxRetries, setMaxRetries] = useState(2)
-  const [maxAttempts, setMaxAttempts] = useState(1)
-  const [gradeBands, setGradeBands] = useState<GradeBand[]>(defaultGradeBands)
-  const [photoUploadWindowMinutes, setPhotoUploadWindowMinutes] = useState(5)
+  const [duration, setDuration] = useState(initialExam?.durationMinutes || 60)
+  const [warningSecs, setWarningSecs] = useState(initialExam?.lookAwayWarningSecs || 3)
+  const [lockoutSecs, setLockoutSecs] = useState(initialExam?.lockoutThresholdSecs || 7)
+  const [maxWarnings, setMaxWarnings] = useState(initialExam?.maxWarnings || 3)
+  const [maxRetries, setMaxRetries] = useState(initialExam?.maxRetries || 2)
+  const [maxAttempts, setMaxAttempts] = useState(initialExam?.maxAttempts || 1)
+  const [gradeBands, setGradeBands] = useState<GradeBand[]>(
+    initialExam?.gradeBands || defaultGradeBands,
+  )
+  const [photoUploadWindowMinutes, setPhotoUploadWindowMinutes] = useState(initialExam?.photoUploadWindowMinutes || 5)
   const [rawText, setRawText] = useState("")
-  const [parsed, setParsed] = useState<Parsed | null>(null)
+  const [parsed, setParsed] = useState<Parsed | null>(
+    initialExam ? { ...initialExam.questions } : null,
+  )
   const [answerNotice, setAnswerNotice] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
-  const [step, setStep] = useState<1 | 2>(1)
+  const [step, setStep] = useState<1 | 2>(initialExam ? 2 : 1)
 
   async function parseText() {
     if (!rawText.trim()) {
@@ -1319,10 +1684,10 @@ function CreateExamModal({
     setError("")
     try {
       const exam: PortalExam = {
-        id: crypto.randomUUID(),
+        id: initialExam?.id || crypto.randomUUID(),
         title: title.trim(),
         subject: subject.trim(),
-        accessCode: "",
+        accessCode: initialExam?.accessCode || "",
         startTime: new Date(startTime).toISOString(),
         endTime: new Date(endTime).toISOString(),
         durationMinutes: duration,
@@ -1336,8 +1701,8 @@ function CreateExamModal({
           ? photoUploadWindowMinutes
           : 0,
         questions: parsed,
-        attempts: [],
-        createdAt: new Date().toISOString(),
+        attempts: initialExam?.attempts || [],
+        createdAt: initialExam?.createdAt || new Date().toISOString(),
       }
       await onSave(exam)
     } catch (cause) {
@@ -1362,11 +1727,12 @@ function CreateExamModal({
       >
         <header className="modal-header">
           <div>
-            <span className="eyebrow">NEW WASSCE EXAMINATION</span>
-            <h2 id="create-title">Create an examination</h2>
+            <span className="eyebrow">{initialExam ? "EDIT PUBLISHED EXAMINATION" : "NEW WASSCE EXAMINATION"}</span>
+            <h2 id="create-title">{initialExam ? "Edit examination" : "Create an examination"}</h2>
             <p>
-              Set up the assessment, add questions, and generate candidate
-              access.
+              {initialExam
+                ? "Update the schedule, settings, or questions for this examination."
+                : "Set up the assessment and questions, then assign it to students."}
             </p>
           </div>
           <button className="close-button" onClick={onClose} aria-label="Close">
@@ -1431,10 +1797,9 @@ function CreateExamModal({
                   />
                 </Field>
                 <div className="field">
-                  <label>Candidate access</label>
+                  <label>Student access</label>
                   <div className="access-preview">
-                    A unique six-character code will be generated
-                    when you publish.
+                    Assign approved student accounts after publishing. Students sign in with their school Student ID and password.
                   </div>
                 </div>
               </div>
@@ -1545,10 +1910,11 @@ function CreateExamModal({
                         value={band.minimum}
                         onChange={(event) =>
                           setGradeBands((current) =>
-                            current.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? { ...item, minimum: Number(event.target.value) }
-                                : item,
+                            adjustGradeBand(
+                              current,
+                              index,
+                              "minimum",
+                              Number(event.target.value),
                             ),
                           )
                         }
@@ -1562,10 +1928,11 @@ function CreateExamModal({
                         value={band.maximum}
                         onChange={(event) =>
                           setGradeBands((current) =>
-                            current.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? { ...item, maximum: Number(event.target.value) }
-                                : item,
+                            adjustGradeBand(
+                              current,
+                              index,
+                              "maximum",
+                              Number(event.target.value),
                             ),
                           )
                         }
@@ -1646,7 +2013,23 @@ function CreateExamModal({
                       {question.correctOptionId ? "KEY SELECTED" : "KEY NEEDED"} · {question.marks || 1} mark
                     </span>
                   </div>
-                  <strong>{question.stem}</strong>
+                  <textarea
+                    className="question-edit-prompt"
+                    aria-label={`Question ${index + 1} text`}
+                    value={question.stem}
+                    onChange={(event) =>
+                      setParsed((value) =>
+                        value && {
+                          ...value,
+                          paper1: value.paper1.map((item) =>
+                            item.id === question.id
+                              ? { ...item, stem: event.target.value }
+                              : item,
+                          ),
+                        },
+                      )
+                    }
+                  />
                   <div className="option-review">
                     {question.options.map((option) => (
                       <label
@@ -1657,26 +2040,48 @@ function CreateExamModal({
                             : "option-pick"
                         }
                       >
+                        <button
+                          type="button"
+                          className="option-key-button"
+                          aria-label={`Set option ${option.label} as correct`}
+                          onClick={() =>
+                            setParsed((value) =>
+                              value && {
+                                ...value,
+                                paper1: value.paper1.map((item) =>
+                                  item.id === question.id
+                                    ? { ...item, correctOptionId: option.id }
+                                    : item,
+                                ),
+                              },
+                            )
+                          }
+                        >
+                          {question.correctOptionId === option.id ? "✓" : option.label}
+                        </button>
                         <input
-                          type="radio"
-                          name={`key-${question.id}`}
-                          checked={question.correctOptionId === option.id}
-                          onChange={() =>
-                            setParsed(
-                              (value) =>
-                                value && {
-                                  ...value,
-                                  paper1: value.paper1.map((q) =>
-                                    q.id === question.id
-                                      ? { ...q, correctOptionId: option.id }
-                                      : q,
-                                  ),
-                                },
+                          aria-label={`Option ${option.label} text`}
+                          value={option.text}
+                          onChange={(event) =>
+                            setParsed((value) =>
+                              value && {
+                                ...value,
+                                paper1: value.paper1.map((item) =>
+                                  item.id === question.id
+                                    ? {
+                                        ...item,
+                                        options: item.options.map((candidate) =>
+                                          candidate.id === option.id
+                                            ? { ...candidate, text: event.target.value }
+                                            : candidate,
+                                        ),
+                                      }
+                                    : item,
+                                ),
+                              },
                             )
                           }
                         />
-                        <b>{option.label}</b>
-                        <span>{option.text}</span>
                       </label>
                     ))}
                   </div>
@@ -1691,7 +2096,23 @@ function CreateExamModal({
                     PAPER 2 · QUESTION {index + 1}
                     <span>AI MODEL ANSWER · {question.marks} marks</span>
                   </div>
-                  <strong>{question.prompt}</strong>
+                  <textarea
+                    className="question-edit-prompt"
+                    aria-label={`Theory question ${index + 1} text`}
+                    value={question.prompt}
+                    onChange={(event) =>
+                      setParsed((value) =>
+                        value && {
+                          ...value,
+                          paper2: value.paper2.map((item) =>
+                            item.id === question.id
+                              ? { ...item, prompt: event.target.value }
+                              : item,
+                          ),
+                        },
+                      )
+                    }
+                  />
                   <textarea
                     placeholder="AI model answer — edit as needed"
                     value={question.expectedAnswer || ""}
@@ -1788,7 +2209,7 @@ function CreateExamModal({
               </button>
             ) : (
               <button type="submit" className="primary-button" disabled={busy}>
-                {busy ? "Creating…" : "Create & schedule exam"}
+                {busy ? "Saving…" : initialExam ? "Save examination changes" : "Create & schedule exam"}
                 <UiIcon name="chevron" />
               </button>
             )}
