@@ -211,7 +211,8 @@ export async function POST(
       const latestCompletion = exam.attempts
         .filter((attempt) => belongsToStudent(attempt) && (attempt.status === "submitted" || attempt.status === "graded"))
         .reduce((latest, attempt) => Math.max(latest, Date.parse(attempt.submittedAt) || 0), 0)
-      let start = exam.candidateStartTimes[key]
+      let start: { startedAt: string; deadlineAt: string } | undefined =
+        exam.candidateStartTimes[key]
       // Clear a start record left by older versions after a completed attempt.
       if (start && Date.parse(start.startedAt) <= latestCompletion) {
         delete exam.candidateStartTimes[key]
