@@ -16,6 +16,9 @@ export type TheoryPart = {
   marks: number
   expectedAnswer?: string
   rubric?: Array<{ criterion: string; marks: number }>
+  photoUploadRecommended?: boolean
+  photoUploadReason?: string
+  allowPhotoUpload?: boolean
   parts?: TheoryPart[]
 }
 

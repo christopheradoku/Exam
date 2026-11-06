@@ -15,6 +15,7 @@ type WorkerResponse = { type: "ready" } | {
   type: "result"
   faceCount: number
   centered: boolean
+  faceSignature: number[] | null
   pose: {
     yaw: number
     pitch: number
@@ -61,6 +62,38 @@ function isCentered(landmarks: NormalizedLandmark[] = []) {
   return Math.abs(centerX - 0.5) <= 0.22 && Math.abs(centerY - 0.5) <= 0.25
 }
 
+// A compact, translation/scale/roll-normalized landmark shape signature.
+// It stays in this worker and is used only to check that the face entering the
+// exam resembles the face present during the preflight camera check.
+function getFaceSignature(landmarks: NormalizedLandmark[] = []) {
+  const indices = [
+    10, 152, 234, 454, 127, 356, 162, 389, 33, 263, 133, 362,
+    168, 6, 197, 5, 1, 2, 70, 300, 105, 334,
+  ]
+  if (landmarks.length <= Math.max(...indices)) return null
+  const leftEye = landmarks[33]
+  const rightEye = landmarks[263]
+  const dx = rightEye.x - leftEye.x
+  const dy = rightEye.y - leftEye.y
+  const eyeDistance = Math.hypot(dx, dy)
+  if (!Number.isFinite(eyeDistance) || eyeDistance < 0.01) return null
+  const cos = dx / eyeDistance
+  const sin = dy / eyeDistance
+  const midX = (leftEye.x + rightEye.x) / 2
+  const midY = (leftEye.y + rightEye.y) / 2
+  const midZ = ((leftEye.z || 0) + (rightEye.z || 0)) / 2
+  return indices.flatMap((index) => {
+    const point = landmarks[index]
+    const x = point.x - midX
+    const y = point.y - midY
+    return [
+      (x * cos + y * sin) / eyeDistance,
+      (-x * sin + y * cos) / eyeDistance,
+      ((point.z || 0) - midZ) / eyeDistance,
+    ]
+  })
+}
+
 worker.addEventListener("message", async (event) => {
   const request = event.data
 
@@ -101,6 +134,8 @@ worker.addEventListener("message", async (event) => {
       type: "result",
       faceCount,
       centered: faceCount === 1 && isCentered(result.faceLandmarks[0]),
+      faceSignature:
+        faceCount === 1 ? getFaceSignature(result.faceLandmarks[0]) : null,
       pose:
         faceCount === 1
           ? getPose(result.facialTransformationMatrixes[0])

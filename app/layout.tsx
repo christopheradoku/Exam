@@ -1,9 +1,14 @@
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import "../src/index.css"
 
 export const metadata: Metadata = {
-  title: "WASSCE Online | Secure Examination Portal",
-  description: "Teacher dashboard for secure WASSCE examinations, proctoring, and grading.",
+  title: "Virtual Exam | Secure Examination Portal",
+  description: "Teacher dashboard for secure virtual examinations, proctoring, and grading.",
+}
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

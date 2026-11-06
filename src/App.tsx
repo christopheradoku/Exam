@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { FormEvent } from "react"
 import type { ObjectiveQuestion, TheoryPart } from "./lib/examTypes"
-import type { ExamAttempt, PortalExam } from "./lib/portalTypes"
+import { defaultGradeBands, type ExamAttempt, type GradeBand, type PortalExam } from "./lib/portalTypes"
 
 type View = "overview" | "exams" | "results" | "settings"
 type Parsed = {
@@ -12,12 +12,129 @@ type Parsed = {
   source?: string
 }
 
-const navItems: { id: View; label: string; icon: string }[] = [
-  { id: "overview", label: "Overview", icon: "⌂" },
-  { id: "exams", label: "Examinations", icon: "▤" },
-  { id: "results", label: "Results", icon: "▥" },
-  { id: "settings", label: "Settings", icon: "⚙" },
+type IconName =
+  | "home"
+  | "exam"
+  | "results"
+  | "settings"
+  | "help"
+  | "shield"
+  | "ai"
+  | "camera"
+  | "users"
+  | "check"
+  | "database"
+  | "chevron"
+  | "external"
+  | "link"
+  | "close"
+  | "plus"
+
+const navItems: { id: View; label: string; icon: IconName }[] = [
+  { id: "overview", label: "Overview", icon: "home" },
+  { id: "exams", label: "Examinations", icon: "exam" },
+  { id: "results", label: "Results", icon: "results" },
+  { id: "settings", label: "Settings", icon: "settings" },
 ]
+
+function UiIcon({ name }: { name: IconName }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {name === "home" && (
+        <>
+          <path d="m3 10 9-7 9 7" />
+          <path d="M5 9v11h14V9M9 20v-6h6v6" />
+        </>
+      )}
+      {name === "exam" && (
+        <>
+          <path d="M7 3h8l4 4v14H7z" />
+          <path d="M15 3v5h4M10 12h6M10 16h6" />
+        </>
+      )}
+      {name === "results" && (
+        <>
+          <path d="M4 20V10h4v10M10 20V4h4v16M16 20v-7h4v7" />
+          <path d="M3 20h18" />
+        </>
+      )}
+      {name === "settings" && (
+        <>
+          <path d="M4 6h16M4 12h16M4 18h16" />
+          <circle cx="8" cy="6" r="2" fill="currentColor" stroke="none" />
+          <circle cx="15" cy="12" r="2" fill="currentColor" stroke="none" />
+          <circle cx="10" cy="18" r="2" fill="currentColor" stroke="none" />
+        </>
+      )}
+      {name === "help" && (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.6 9a2.5 2.5 0 1 1 4.6 1.3c-.8 1.1-2.2 1.2-2.2 2.7M12 16.5h.01" />
+        </>
+      )}
+      {name === "shield" && (
+        <>
+          <path d="M12 3 20 6v5c0 5-3.4 8.2-8 10-4.6-1.8-8-5-8-10V6z" />
+          <path d="m9 12 2 2 4-4" />
+        </>
+      )}
+      {name === "ai" && (
+        <>
+          <rect x="7" y="7" width="10" height="10" rx="2" />
+          <path d="M10 11h4M10 14h2M9 3v4m6-4v4M9 17v4m6-4v4M3 9h4m-4 6h4m10-6h4m-4 6h4" />
+        </>
+      )}
+      {name === "camera" && (
+        <>
+          <path d="M4 7h3l1.5-2h7L17 7h3v12H4z" />
+          <circle cx="12" cy="13" r="3.5" />
+        </>
+      )}
+      {name === "users" && (
+        <>
+          <circle cx="9" cy="8" r="3" />
+          <path d="M3.5 20v-1.5a5.5 5.5 0 0 1 11 0V20zM16 5.5a3 3 0 0 1 0 5.8M17 14a4 4 0 0 1 3.5 4v2" />
+        </>
+      )}
+      {name === "check" && (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m8 12 2.5 2.5L16 9" />
+        </>
+      )}
+      {name === "database" && (
+        <>
+          <ellipse cx="12" cy="5" rx="8" ry="3" />
+          <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+        </>
+      )}
+      {name === "chevron" && <path d="m9 6 6 6-6 6" />}
+      {name === "external" && (
+        <>
+          <path d="M14 5h5v5M19 5l-8 8" />
+          <path d="M18 13v5H5V5h5" />
+        </>
+      )}
+      {name === "link" && (
+        <g strokeWidth="2.8">
+          <path d="m9.5 14.5-2 2a4 4 0 0 1-5.7-5.7l4.5-4.5a4 4 0 0 1 5.7 0" />
+          <path d="m14.5 9.5 2-2a4 4 0 0 1 5.7 5.7l-4.5 4.5a4 4 0 0 1-5.7 0" />
+          <path d="m8.5 15.5 7-7" />
+        </g>
+      )}
+      {name === "close" && <path d="m7 7 10 10M17 7 7 17" />}
+      {name === "plus" && <path d="M12 5v14M5 12h14" />}
+    </svg>
+  )
+}
 
 function dateInput(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
@@ -185,7 +302,7 @@ export default function App() {
               <span>✓ Objective and theory results</span>
             </div>
           </div>
-          <small className="hero-foot">WASSCE ONLINE · TEACHER PORTAL</small>
+          <small className="hero-foot">VIRTUAL EXAM · TEACHER PORTAL</small>
         </section>
         <section className="login-panel">
           <form className="login-card" onSubmit={signIn}>
@@ -204,7 +321,7 @@ export default function App() {
             />
             <button className="primary-button wide" disabled={loading}>
               {loading ? "Signing in…" : "Sign in to portal"}
-              <span>→</span>
+              <UiIcon name="chevron" />
             </button>
             {loginError && (
               <div className="inline-error" role="alert">
@@ -212,7 +329,7 @@ export default function App() {
               </div>
             )}
             <div className="login-note">
-              <span>♧</span>
+              <span><UiIcon name="shield" /></span>
               <p>
                 Your session is protected with an HTTP-only cookie and expires
                 after 8 hours.
@@ -235,7 +352,7 @@ export default function App() {
               className={view === item.id ? "nav-item active" : "nav-item"}
               onClick={() => setView(item.id)}
             >
-              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-icon"><UiIcon name={item.icon} /></span>
               {item.label}
               {item.id === "exams" && exams.length > 0 && (
                 <span className="nav-count">{exams.length}</span>
@@ -245,11 +362,11 @@ export default function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="support-card">
-            <span className="support-icon">✦</span>
+            <span className="support-icon"><UiIcon name="help" /></span>
             <strong>Need a hand?</strong>
             <p>Build a reliable exam in just a few steps.</p>
             <button onClick={() => setShowCreate(true)}>
-              Create an exam <span>→</span>
+              Create an exam <UiIcon name="chevron" />
             </button>
           </div>
           <div className="user-row">
@@ -259,7 +376,7 @@ export default function App() {
               <small>Exam coordinator</small>
             </div>
             <button title="Sign out" onClick={signOut}>
-              ↗
+              <UiIcon name="external" />
             </button>
           </div>
         </div>
@@ -319,7 +436,7 @@ export default function App() {
       {toast && (
         <div className="toast" role="status">
           ✓ <span>{toast}</span>
-          <button onClick={() => setToast("")}>×</button>
+          <button onClick={() => setToast("")} aria-label="Dismiss notification"><UiIcon name="close" /></button>
         </div>
       )}
     </div>
@@ -331,7 +448,7 @@ function Brand() {
     <div className="brand">
       <span className="brand-mark">W</span>
       <span className="brand-type">
-        <strong>WASSCE Online</strong>
+        <strong>Virtual Exam</strong>
         <small>Secure examination portal</small>
       </span>
     </div>
@@ -371,12 +488,12 @@ function Overview({
               .toUpperCase()}
           </span>
           <h1>
-            Good day, Teacher <span>✦</span>
+            Good day, Teacher
           </h1>
           <p>Here’s the latest activity across your examination workspace.</p>
         </div>
         <button className="primary-button" onClick={onCreate}>
-          <span>＋</span> Create examination
+          <UiIcon name="plus" /> Create examination
         </button>
       </div>
       <section className="metric-grid">
@@ -384,28 +501,28 @@ function Overview({
           label="Total examinations"
           value={stats.exams}
           foot="Created in this workspace"
-          icon="▤"
+          icon="exam"
           tint="blue"
         />
         <Metric
           label="Live right now"
           value={stats.live}
           foot={stats.live ? "Candidates can enter" : "No active sessions"}
-          icon="◉"
+          icon="camera"
           tint="green"
         />
         <Metric
           label="Candidate attempts"
           value={stats.candidates}
           foot="Across all examinations"
-          icon="♧"
+          icon="users"
           tint="purple"
         />
         <Metric
           label="Graded submissions"
           value={stats.graded}
           foot="Objective + theory"
-          icon="✓"
+          icon="check"
           tint="amber"
         />
       </section>
@@ -417,7 +534,7 @@ function Overview({
               <p>Manage schedules and candidate access.</p>
             </div>
             <button className="text-button" onClick={() => onView("exams")}>
-              View all <span>→</span>
+              <span>View all <UiIcon name="chevron" /></span>
             </button>
           </div>
           {recent.length ? (
@@ -434,23 +551,23 @@ function Overview({
             </div>
           </div>
           <button className="quick-action" onClick={onCreate}>
-            <span className="quick-icon qi-blue">＋</span>
+            <span className="quick-icon qi-blue"><UiIcon name="exam" /></span>
             <span>
               <strong>Create an examination</strong>
               <small>Set questions, schedule and access</small>
             </span>
-            <b>→</b>
+            <b><UiIcon name="chevron" /></b>
           </button>
           <button className="quick-action" onClick={() => onView("results")}>
-            <span className="quick-icon qi-green">▥</span>
+            <span className="quick-icon qi-green"><UiIcon name="results" /></span>
             <span>
               <strong>Review results</strong>
               <small>Scores and candidate submissions</small>
             </span>
-            <b>→</b>
+            <b><UiIcon name="chevron" /></b>
           </button>
           <div className="proctor-note">
-            <span>◉</span>
+            <span><UiIcon name="camera" /></span>
             <div>
               <strong>Local camera checks are ready</strong>
               <p>
@@ -462,7 +579,7 @@ function Overview({
         </div>
       </section>
       <div className="bottom-hint">
-        <span>✦</span> <strong>WASSCE standard, built in.</strong> Questions can
+        <strong>WASSCE standard, built in.</strong> Questions can
         be reviewed and answer keys confirmed before an exam is published.
       </div>
     </>
@@ -479,14 +596,14 @@ function Metric({
   label: string
   value: number
   foot: string
-  icon: string
+  icon: IconName
   tint: string
 }) {
   return (
     <article className="metric-card">
       <div className="metric-top">
         <span>{label}</span>
-        <i className={`metric-icon ${tint}`}>{icon}</i>
+        <i className={`metric-icon ${tint}`}><UiIcon name={icon} /></i>
       </div>
       <strong className="metric-value">{value}</strong>
       <small>{foot}</small>
@@ -504,21 +621,10 @@ function ExamTable({
   onDetails: (exam: PortalExam) => void
 }) {
   return (
-    <div className="table-wrap">
-      <table className="exam-table">
-        <thead>
-          <tr>
-            <th>EXAMINATION</th>
-            <th>SCHEDULE</th>
-            <th>STATUS</th>
-            <th>ATTEMPTS</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {exams.map((exam) => (
-            <tr key={exam.id}>
-              <td>
+    <div className="exam-card-list">
+      {exams.map((exam) => (
+        <article className="exam-summary-card" key={exam.id}>
+          <div className="exam-summary-main">
                 <span className="subject-avatar">
                   {initials(exam.subject || exam.title)}
                 </span>
@@ -531,8 +637,8 @@ function ExamTable({
                     questions
                   </small>
                 </span>
-              </td>
-              <td>
+          </div>
+          <div className="exam-summary-detail">
                 <strong>{new Date(exam.startTime).toLocaleDateString()}</strong>
                 <small className="td-sub">
                   {new Date(exam.startTime).toLocaleTimeString([], {
@@ -541,14 +647,15 @@ function ExamTable({
                   })}{" "}
                   · {exam.durationMinutes} min
                 </small>
-              </td>
-              <td>
+          </div>
+          <div className="exam-summary-detail">
                 <Status state={examState(exam)} />
-              </td>
-              <td>
+          </div>
+          <div className="exam-summary-detail attempts-detail">
+                <small>Attempts</small>
                 <span className="attempt-count">{exam.attempts.length}</span>
-              </td>
-              <td>
+          </div>
+          <div>
                 <div className="row-actions">
                   <button
                     title="Exam details"
@@ -562,7 +669,7 @@ function ExamTable({
                     title="Copy student link"
                     onClick={() => void copyStudentLink(exam, onToast)}
                   >
-                    ↗
+                    <UiIcon name="link" />
                   </button>
                   <button
                     title="Open student exam"
@@ -574,7 +681,7 @@ function ExamTable({
                       )
                     }
                   >
-                    ↗
+                    <UiIcon name="external" />
                   </button>
                   <button
                     title="Delete examination"
@@ -592,14 +699,12 @@ function ExamTable({
                       else onToast("Could not delete this examination.")
                     }}
                   >
-                    ×
+                    <UiIcon name="close" />
                   </button>
                 </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </div>
+        </article>
+      ))}
     </div>
   )
 }
@@ -678,7 +783,7 @@ function ExamDetailsModal({
             onClick={onClose}
             aria-label="Close details"
           >
-            ×
+            <UiIcon name="close" />
           </button>
         </header>
         <div className="details-body">
@@ -738,7 +843,7 @@ function ExamDetailsModal({
               window.open(`/exam/${exam.id}`, "_blank", "noopener,noreferrer")
             }
           >
-            Open student view <span>↗</span>
+            Open student view <UiIcon name="external" />
           </button>
         </footer>
       </section>
@@ -749,14 +854,14 @@ function ExamDetailsModal({
 function EmptyExams({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="empty-state">
-      <span className="empty-illustration">▤</span>
+      <span className="empty-illustration"><UiIcon name="exam" /></span>
       <strong>Your first exam starts here</strong>
       <p>
         Create an examination, add questions, and share a secure access link
         with candidates.
       </p>
       <button className="primary-button" onClick={onCreate}>
-        Create examination <span>→</span>
+        Create examination <UiIcon name="chevron" />
       </button>
     </div>
   )
@@ -782,7 +887,7 @@ function ExamsPage({
           <p>Create, schedule, and share candidate access.</p>
         </div>
         <button className="primary-button" onClick={onCreate}>
-          ＋ Create examination
+          <UiIcon name="plus" /> Create examination
         </button>
       </div>
       <div className="panel full-panel">
@@ -803,10 +908,12 @@ function ExamsPage({
 }
 
 function ResultsPage({ exams }: { exams: PortalExam[] }) {
+  const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set())
   const attempts = exams
     .flatMap((exam) =>
       exam.attempts.map((attempt) => ({
         ...attempt,
+        examId: exam.id,
         examTitle: exam.title,
         subject: exam.subject,
       })),
@@ -867,7 +974,14 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
                           {attempt.theoryScore}/{attempt.theoryMax}
                         </strong>
                       )}
-                      <TheoryFeedbackDetails report={attempt.theoryReport} />
+                      <TheoryFeedbackDetails
+                        report={attempt.theoryReport}
+                        photoAnswers={attempt.photoAnswers}
+                        examId={attempt.examId}
+                        attemptId={attempt.id}
+                        reviewed={Boolean(attempt.teacherReviewed) || reviewedIds.has(attempt.id)}
+                        onReviewed={() => setReviewedIds((current) => new Set(current).add(attempt.id))}
+                      />
                     </td>
                     <td>
                       <strong>
@@ -886,7 +1000,7 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
                           attempt.status === "locked"
                             ? "Locked"
                             : attempt.status === "graded"
-                              ? "Graded"
+                              ? attempt.teacherReviewed || reviewedIds.has(attempt.id) ? "Reviewed" : "Review"
                               : "Submitted"
                         }
                       />
@@ -898,7 +1012,7 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
           </div>
         ) : (
           <div className="empty-state">
-            <span className="empty-illustration">▥</span>
+            <span className="empty-illustration"><UiIcon name="results" /></span>
             <strong>No submissions yet</strong>
             <p>
               Candidate results will appear here when an examination is
@@ -913,14 +1027,50 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
 
 function TheoryFeedbackDetails({
   report,
+  photoAnswers,
+  examId,
+  attemptId,
+  reviewed: initialReviewed,
+  onReviewed,
 }: {
   report?: ExamAttempt["theoryReport"]
+  photoAnswers?: ExamAttempt["photoAnswers"]
+  examId: string
+  attemptId: string
+  reviewed: boolean
+  onReviewed: () => void
 }) {
-  if (!report?.length) return null
+  const [reviewed, setReviewed] = useState(initialReviewed)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  if (!report?.length && !Object.keys(photoAnswers || {}).length) return null
+  async function markReviewed() {
+    setBusy(true)
+    setError("")
+    try {
+      const response = await fetch(`/api/exams/${examId}/attempts/${attemptId}/review`, { method: "POST" })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || "Could not save the review.")
+      setReviewed(true)
+      onReviewed()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save the review.")
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <details className="theory-feedback-details">
-      <summary>AI examiner notes</summary>
-      {report.map((item) => (
+      <summary>AI notes and submitted work</summary>
+      {Object.entries(photoAnswers || {}).map(([questionId, image]) => (
+        <div key={`photo-${questionId}`}>
+          <strong>{questionId} · handwritten answer</strong>
+          <a href={image} target="_blank" rel="noreferrer">
+            <img className="submitted-answer-photo" src={image} alt={`Handwritten answer for ${questionId}`} />
+          </a>
+        </div>
+      ))}
+      {(report || []).map((item) => (
         <div key={item.questionId}>
           <strong>
             {item.questionId} · {item.awardedMarks}/{item.maxMarks}
@@ -929,76 +1079,71 @@ function TheoryFeedbackDetails({
           <small>{item.workedOutSolution}</small>
         </div>
       ))}
+      {report?.length ? (
+        <div className="teacher-review-action">
+          {reviewed ? (
+            <strong>Teacher review recorded</strong>
+          ) : (
+            <button type="button" className="secondary-button" disabled={busy} onClick={markReviewed}>
+              {busy ? "Saving review…" : "Mark as teacher reviewed"}
+            </button>
+          )}
+          {error && <small role="alert">{error}</small>}
+        </div>
+      ) : null}
     </details>
   )
 }
 
 function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
-  const [configured, setConfigured] = useState({
-    groqConfigured: false,
-  })
-  useEffect(() => {
-    fetch("/api/settings")
-      .then((response) => response.json())
-      .then(setConfigured)
-      .catch(() => {})
-  }, [])
   return (
     <>
       <div className="page-heading compact">
         <div>
-          <span className="eyebrow">PORTAL CONFIGURATION</span>
+          <span className="eyebrow">EXAMINATION PREFERENCES</span>
           <h1>Settings</h1>
-          <p>Configure server integrations and keep credentials private.</p>
+          <p>Choose how your examinations feel for teachers and candidates.</p>
         </div>
       </div>
       <section className="settings-grid">
         <div className="panel settings-card">
-          <span className="settings-icon blue">✦</span>
-          <h2>Groq AI</h2>
+          <span className="settings-icon blue"><UiIcon name="exam" /></span>
+          <h2>Assessment defaults</h2>
           <p>
-            Used to parse pasted exam text and grade theory responses. The key
-            is read on the server and never sent to the browser.
+            New examinations start with a 60-minute duration and allow one
+            candidate attempt. You can change these choices while creating an
+            examination.
           </p>
           <div className="config-status">
-            <i className={configured.groqConfigured ? "configured" : ""} />
-            {configured.groqConfigured
-              ? "Configured"
-              : "Add GROQ_API_KEY to .env.local"}
+            <i className="configured" />
+            Ready for your next examination
           </div>
-          <button
-            className="secondary-button"
-            onClick={() =>
-              onToast("Set GROQ_API_KEY in .env.local, then restart pnpm dev.")
-            }
-          >
-            How to configure <span>→</span>
+          <button className="secondary-button" onClick={() => onToast("Choose these options in Create an examination.")}>
+            Create an examination <UiIcon name="chevron" />
           </button>
         </div>
         <div className="panel settings-card">
-          <span className="settings-icon green">◉</span>
-          <h2>Local camera checks</h2>
+          <span className="settings-icon green"><UiIcon name="shield" /></span>
+          <h2>Candidate protection</h2>
           <p>
-            MediaPipe checks the student’s camera feed in the browser before and
-            during the exam. Frames stay on the device; no API key, Docker
-            service, or paid quota is required.
+            Camera checks help keep each examination fair. Candidates are
+            clearly warned before an examination is locked.
           </p>
           <div className="config-status">
             <i className="configured" />
-            Ready — no API setup needed
+            Protection is ready
           </div>
         </div>
         <div className="panel settings-card">
-          <span className="settings-icon purple">▤</span>
-          <h2>Local data store</h2>
+          <span className="settings-icon purple"><UiIcon name="users" /></span>
+          <h2>Candidate experience</h2>
           <p>
-            Exams and attempt records are persisted in the server-side{" "}
-            <code>data/exams.json</code> file, so shared student links work
-            across devices using this server.
+            Share a simple exam link and access code. Candidates see only the
+            questions and instructions they need to complete their work.
           </p>
           <div className="config-status">
             <i className="configured" />
-            Active
+            Ready to share
           </div>
         </div>
       </section>
@@ -1026,6 +1171,9 @@ function CreateExamModal({
   const [lockoutSecs, setLockoutSecs] = useState(7)
   const [maxWarnings, setMaxWarnings] = useState(3)
   const [maxRetries, setMaxRetries] = useState(2)
+  const [maxAttempts, setMaxAttempts] = useState(1)
+  const [gradeBands, setGradeBands] = useState<GradeBand[]>(defaultGradeBands)
+  const [photoUploadWindowMinutes, setPhotoUploadWindowMinutes] = useState(5)
   const [rawText, setRawText] = useState("")
   const [parsed, setParsed] = useState<Parsed | null>(null)
   const [answerNotice, setAnswerNotice] = useState("")
@@ -1073,7 +1221,7 @@ function CreateExamModal({
     setBusy(true)
     setError("")
     setAnswerNotice(
-      "Asking Groq to solve the questions and draft the marking guide…",
+      "AI is preparing the answer keys and marking guide. If Groq is busy, the app will wait and retry automatically…",
     )
     try {
       const response = await fetch("/api/exams/answer-suggestions", {
@@ -1087,6 +1235,8 @@ function CreateExamModal({
           id: string
           expectedAnswer: string
           rubric: Array<{ criterion: string; marks: number }>
+          photoUploadRecommended?: boolean
+          photoUploadReason?: string
         }>
         error?: string
       }
@@ -1094,6 +1244,12 @@ function CreateExamModal({
         throw new Error(
           suggestions.error || "AI answer suggestions are unavailable.",
         )
+      const suggestedIds = new Set(
+        (suggestions.paper1 || []).map((suggestion) => suggestion.id),
+      )
+      const unansweredCount = parsed.paper1.filter(
+        (question) => !question.correctOptionId && !suggestedIds.has(question.id),
+      ).length
       setParsed(
         (current) =>
           current && {
@@ -1119,12 +1275,20 @@ function CreateExamModal({
                 rubric: question.rubric?.length
                   ? question.rubric
                   : suggestion?.rubric,
+                photoUploadRecommended:
+                  suggestion?.photoUploadRecommended ?? question.photoUploadRecommended ?? false,
+                photoUploadReason:
+                  suggestion?.photoUploadReason ?? question.photoUploadReason ?? "",
+                allowPhotoUpload:
+                  question.allowPhotoUpload ?? suggestion?.photoUploadRecommended ?? false,
               }
             }),
           },
       )
       setAnswerNotice(
-        "AI answer suggestions are ready. Review and edit every key or marking guide before publishing.",
+        unansweredCount
+          ? `AI filled the available answer keys and drafted the marking guides. ${unansweredCount} objective question${unansweredCount === 1 ? " still needs" : "s still need"} a key; retry AI generation or select the answer manually.`
+          : "AI answer keys, marking guides, and handwriting upload suggestions are ready. Review and edit them before publishing.",
       )
     } catch (cause) {
       setAnswerNotice(
@@ -1145,7 +1309,9 @@ function CreateExamModal({
       return
     }
     if (parsed.paper1.some((question) => !question.correctOptionId)) {
-      setError("Select the answer key for each objective question.")
+      setError(
+        "An objective answer key is still missing. Retry AI answer generation or select the correct option manually.",
+      )
       setStep(2)
       return
     }
@@ -1164,6 +1330,11 @@ function CreateExamModal({
         lockoutThresholdSecs: lockoutSecs,
         maxWarnings,
         maxRetries,
+        maxAttempts,
+        gradeBands,
+        photoUploadWindowMinutes: parsed.paper2.some((question) => question.allowPhotoUpload)
+          ? photoUploadWindowMinutes
+          : 0,
         questions: parsed,
         attempts: [],
         createdAt: new Date().toISOString(),
@@ -1199,7 +1370,7 @@ function CreateExamModal({
             </p>
           </div>
           <button className="close-button" onClick={onClose} aria-label="Close">
-            ×
+            <UiIcon name="close" />
           </button>
         </header>
         <div className="stepper">
@@ -1262,7 +1433,7 @@ function CreateExamModal({
                 <div className="field">
                   <label>Candidate access</label>
                   <div className="access-preview">
-                    <span>✦</span> A unique six-character code will be generated
+                    A unique six-character code will be generated
                     when you publish.
                   </div>
                 </div>
@@ -1321,15 +1492,99 @@ function CreateExamModal({
                   />
                 </Field>
               </div>
+              <div className="form-grid">
+                <Field label="Allowed attempts per candidate">
+                  <input
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={maxAttempts}
+                    onChange={(event) => setMaxAttempts(Number(event.target.value))}
+                  />
+                </Field>
+                <div className="field">
+                  <label>What this means</label>
+                  <div className="access-preview">
+                    Candidates can submit this many times.
+                  </div>
+                </div>
+              </div>
+              <div className="form-grid">
+                <Field label="Handwritten answer upload window (minutes)">
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={photoUploadWindowMinutes}
+                    onChange={(event) =>
+                      setPhotoUploadWindowMinutes(Number(event.target.value))
+                    }
+                  />
+                </Field>
+                <div className="access-preview photo-window-help">
+                  Opens after the student finishes the timed paper. Camera
+                  checks pause while approved handwritten answers are uploaded.
+                </div>
+              </div>
+              <div className="grading-section">
+                <div className="section-divider">
+                  <div>
+                    <strong>Grade boundaries</strong>
+                    <small>Set the percentage range for each letter grade.</small>
+                  </div>
+                </div>
+                <div className="grade-band-grid">
+                  {gradeBands.map((band, index) => (
+                    <div className="grade-band" key={band.label}>
+                      <strong>{band.label}</strong>
+                      <input
+                        aria-label={`${band.label} minimum percentage`}
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={band.minimum}
+                        onChange={(event) =>
+                          setGradeBands((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index
+                                ? { ...item, minimum: Number(event.target.value) }
+                                : item,
+                            ),
+                          )
+                        }
+                      />
+                      <span>to</span>
+                      <input
+                        aria-label={`${band.label} maximum percentage`}
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={band.maximum}
+                        onChange={(event) =>
+                          setGradeBands((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index
+                                ? { ...item, maximum: Number(event.target.value) }
+                                : item,
+                            ),
+                          )
+                        }
+                      />
+                      <span>%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div className="section-divider">
                 <div>
                   <strong>Add questions</strong>
                   <small>
-                    Paste raw questions. AI parsing is used when GROQ_API_KEY is
-                    configured; a local parser is also available.
+                    Paste a WASSCE paper or numbered questions. Standard
+                    objective and essay layouts are parsed locally; AI is used
+                    for answer suggestions.
                   </small>
                 </div>
-                <span className="ai-tag">✦ AI PARSER</span>
+                <span className="ai-tag">QUESTION IMPORT</span>
               </div>
               <Field label="Raw examination text">
                 <textarea
@@ -1353,7 +1608,7 @@ function CreateExamModal({
                   onClick={parseText}
                   disabled={busy}
                 >
-                  {busy ? "Parsing…" : "✦ Parse questions"}
+                  {busy ? "Parsing…" : "Parse questions"}
                 </button>
               </div>
             </div>
@@ -1375,7 +1630,7 @@ function CreateExamModal({
                   onClick={reviewQuestions}
                   disabled={busy}
                 >
-                  ✦ Fill missing AI answers
+                  Generate AI answers & photo suggestions
                 </button>
               </div>
               {answerNotice && (
@@ -1387,7 +1642,9 @@ function CreateExamModal({
                 <article className="question-review" key={question.id}>
                   <div className="question-label">
                     PAPER 1 · QUESTION {index + 1}
-                    <span>AI SUGGESTED KEY · {question.marks || 1} mark</span>
+                    <span>
+                      {question.correctOptionId ? "KEY SELECTED" : "KEY NEEDED"} · {question.marks || 1} mark
+                    </span>
                   </div>
                   <strong>{question.stem}</strong>
                   <div className="option-review">
@@ -1428,7 +1685,7 @@ function CreateExamModal({
               {parsed?.paper2.map((question, index) => (
                 <article
                   className="question-review theory-review"
-                  key={question.id}
+                  key={`paper2-${index}-${question.id || "question"}`}
                 >
                   <div className="question-label">
                     PAPER 2 · QUESTION {index + 1}
@@ -1466,6 +1723,35 @@ function CreateExamModal({
                       )
                     }
                   />
+                  <div className="photo-review-setting">
+                    <div>
+                      <strong>AI handwriting suggestion</strong>
+                      <small>
+                        {question.photoUploadRecommended
+                          ? question.photoUploadReason || "A photo may help show diagrams or working."
+                          : "A typed response should work for this question."}
+                      </small>
+                    </div>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(question.allowPhotoUpload)}
+                        onChange={(event) =>
+                          setParsed((value) =>
+                            value && {
+                              ...value,
+                              paper2: value.paper2.map((item) =>
+                                item.id === question.id
+                                  ? { ...item, allowPhotoUpload: event.target.checked }
+                                  : item,
+                              ),
+                            },
+                          )
+                        }
+                      />
+                      Allow a handwritten photo answer
+                    </label>
+                  </div>
                 </article>
               ))}
             </div>
@@ -1498,12 +1784,12 @@ function CreateExamModal({
                 onClick={reviewQuestions}
               >
                 {busy ? "Generating AI answers…" : "Review & generate answers"}{" "}
-                <span>→</span>
+                <UiIcon name="chevron" />
               </button>
             ) : (
               <button type="submit" className="primary-button" disabled={busy}>
                 {busy ? "Creating…" : "Create & schedule exam"}
-                <span>→</span>
+                <UiIcon name="chevron" />
               </button>
             )}
           </footer>
@@ -1575,7 +1861,7 @@ function RubricEditor({
             aria-label={`Remove criterion ${index + 1}`}
             onClick={() => onChange(rubric.filter((_, i) => i !== index))}
           >
-            ×
+            <UiIcon name="close" />
           </button>
         </div>
       ))}
@@ -1586,7 +1872,7 @@ function RubricEditor({
           onChange([...rubric, { criterion: "New criterion", marks: 1 }])
         }
       >
-        ＋ Add marking criterion
+        <UiIcon name="plus" /> Add marking criterion
       </button>
     </div>
   )

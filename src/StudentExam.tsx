@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { FormEvent } from "react"
 import { useLocalFaceProctor } from "./hooks/useLocalFaceProctor"
 import type { ObjectiveQuestion, TheoryPart } from "./lib/examTypes"
+import { defaultGradeBands, type GradeBand } from "./lib/portalTypes"
 
 type StudentExamData = {
   id: string
@@ -16,7 +17,18 @@ type StudentExamData = {
   lockoutThresholdSecs: number
   maxWarnings: number
   maxRetries: number
+  maxAttempts: number
+  gradeBands: GradeBand[]
+  photoUploadWindowMinutes?: number
   questions: { paper1: ObjectiveQuestion[]; paper2: TheoryPart[] }
+}
+
+function percentageGrade(score: number, maximum: number, bands: GradeBand[]) {
+  if (!maximum || !bands.length) return null
+  const percentage = (score / maximum) * 100
+  return bands.find(
+    (band) => percentage >= band.minimum && percentage <= band.maximum,
+  )?.label || null
 }
 type Attempt = {
   id: string
@@ -24,8 +36,75 @@ type Attempt = {
   objectiveMax: number
   theoryScore?: number
   theoryMax?: number
+  status?: "submitted" | "locked" | "graded"
 }
-type Screen = "gate" | "preflight" | "paper1" | "paper2" | "submitted" | "locked"
+type Screen = "gate" | "preflight" | "paper1" | "paper2" | "upload" | "submitted" | "locked"
+
+async function compressHandwrittenPhoto(file: File) {
+  const bitmap = await createImageBitmap(file)
+  const scale = Math.min(1, 1500 / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.round(bitmap.width * scale)
+  canvas.height = Math.round(bitmap.height * scale)
+  const context = canvas.getContext("2d")
+  if (!context) throw new Error("Could not prepare the photo. Try another image.")
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  let quality = 0.76
+  let image = canvas.toDataURL("image/jpeg", quality)
+  while (image.length > 1_450_000 && quality > 0.42) {
+    quality -= 0.08
+    image = canvas.toDataURL("image/jpeg", quality)
+  }
+  if (image.length > 1_500_000)
+    throw new Error("This photo is too large. Retake it closer to the page in good light.")
+  return image
+}
+
+async function verifyStudentAccess(
+  examId: string,
+  details: { accessCode: string; candidateName: string; candidateNumber: string },
+  action: "enter" | "start" = "enter",
+) {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 15000)
+  try {
+    const response = await fetch(`/api/student/exams/${examId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...details }),
+      signal: controller.signal,
+    })
+    return { response, body: await response.json() }
+  } catch (cause) {
+    if (controller.signal.aborted)
+      throw new Error("Verification timed out. Check your connection to the exam server and try again.")
+    throw cause
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+async function enterExamFullscreen() {
+  if (document.fullscreenElement) return
+  if (!document.documentElement.requestFullscreen)
+    throw new Error(
+      "Fullscreen is required for this examination. Open it in a browser that supports fullscreen mode and try again.",
+    )
+  try {
+    await document.documentElement.requestFullscreen()
+  } catch {
+    throw new Error(
+      "Fullscreen is required. Allow fullscreen mode in your browser, then press Start exam again.",
+    )
+  }
+  if (!document.fullscreenElement)
+    throw new Error("Fullscreen could not be enabled. Press Start exam to try again.")
+}
+
+function exitExamFullscreen() {
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
+}
 
 function formatClock(seconds: number) {
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(
@@ -56,6 +135,8 @@ function createExamPreview(
     lockoutThresholdSecs: preview.lockoutThresholdSecs ?? 7,
     maxWarnings: preview.maxWarnings ?? 3,
     maxRetries: preview.maxRetries ?? 0,
+    maxAttempts: preview.maxAttempts ?? 1,
+    gradeBands: preview.gradeBands ?? defaultGradeBands,
     questions: { paper1: [], paper2: [] },
   }
 }
@@ -65,10 +146,33 @@ function Brand() {
     <div className="brand">
       <span className="brand-mark">W</span>
       <span className="brand-type">
-        <strong>WASSCE Online</strong>
+        <strong>Virtual Exam</strong>
         <small>Secure examination portal</small>
       </span>
     </div>
+  )
+}
+
+function ExamText({ text }: { text: string }) {
+  const tokens = text.split(/(\^\{[^}]+\}|\^[+-]?\d+|_\{[^}]+\}|_[+-]?\d+|\)\d+|[A-Z][a-z]?\d+)/g)
+  return (
+    <>
+      {tokens.map((token, index) => {
+        if (token.startsWith("^"))
+          return <sup key={index}>{token.startsWith("^{") ? token.slice(2, -1) : token.slice(1)}</sup>
+        if (token.startsWith("_"))
+          return <sub key={index}>{token.startsWith("_{") ? token.slice(2, -1) : token.slice(1)}</sub>
+        const groupIndex = token.match(/^\)(\d+)$/)
+        if (groupIndex)
+          return <span key={index}>)<sub>{groupIndex[1]}</sub></span>
+        const formula = token.match(/^([A-Z][a-z]?)(\d+)$/)
+        return formula ? (
+          <span key={index}>{formula[1]}<sub>{formula[2]}</sub></span>
+        ) : (
+          <span key={index}>{token}</span>
+        )
+      })}
+    </>
   )
 }
 
@@ -91,7 +195,7 @@ function TheoryResponse({
           <strong>{part.label || "Sub-question"}</strong>
           <span>{part.marks} marks</span>
         </div>
-        <p>{part.prompt}</p>
+        <p><ExamText text={part.prompt} /></p>
         {part.parts?.length ? (
           part.parts.map((child) => renderPart(child, depth + 1))
         ) : (
@@ -110,7 +214,12 @@ function TheoryResponse({
       <span className="question-count">
         QUESTION {question.label || question.id} <i>{question.marks} marks</i>
       </span>
-      <h2>{question.prompt}</h2>
+      <h2><ExamText text={question.prompt} /></h2>
+      {question.allowPhotoUpload && (
+        <p className="handwriting-hint">
+          You may write this answer on paper while camera supervision is active, then photograph it during the final upload window.
+        </p>
+      )}
       {question.parts?.length ? (
         question.parts.map((part) => renderPart(part))
       ) : (
@@ -134,18 +243,26 @@ export default function StudentExam({ examId }: { examId: string }) {
   const [gate, setGate] = useState<"early" | "closed" | "">("")
   const [now, setNow] = useState(Date.now())
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [photoAnswers, setPhotoAnswers] = useState<Record<string, string>>({})
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const [autoSubmitReason, setAutoSubmitReason] = useState("")
   const [remaining, setRemaining] = useState(0)
   const [attempt, setAttempt] = useState<Attempt | null>(null)
   const [paper2Pending, setPaper2Pending] = useState(false)
+  const [uploadSeconds, setUploadSeconds] = useState(0)
+  const [photoBusyQuestion, setPhotoBusyQuestion] = useState("")
   const [proctorOn, setProctorOn] = useState(false)
   const [warnings, setWarnings] = useState(0)
   const [reshuffleCount, setReshuffleCount] = useState(0)
   const [shuffleSeed, setShuffleSeed] = useState<string | undefined>()
+  const [isMobilePhone, setIsMobilePhone] = useState(false)
   const answerKey = `wassce-answers-${examId}`
   const formRef = useRef<HTMLFormElement>(null)
+  const autoSubmitTriggeredRef = useRef(false)
+  const autoSubmitRef = useRef<(reason: string) => void>(() => undefined)
   const deadlineAt = useRef(0)
+  const photoUploadDeadlineAt = useRef(0)
   const liveSession = useRef({
     exam: null as StudentExamData | null,
     accessCode: "",
@@ -208,16 +325,67 @@ export default function StudentExam({ examId }: { examId: string }) {
   liveSession.current.warnings = warnings
 
   useEffect(() => {
+    if (!proctorOn || !isExamScreen) return
+    let fullscreenWasEntered = Boolean(document.fullscreenElement)
+    const autoSubmit = (reason: string) => {
+      if (autoSubmitTriggeredRef.current) return
+      autoSubmitTriggeredRef.current = true
+      autoSubmitRef.current(reason)
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden")
+        autoSubmit("The exam tab was left or hidden")
+    }
+    const onFullscreenChange = () => {
+      if (document.fullscreenElement) fullscreenWasEntered = true
+      else if (fullscreenWasEntered) autoSubmit("Fullscreen mode was exited")
+    }
+    const onPageHide = () => autoSubmit("The exam page was left")
+    const onBeforeUnload = () => autoSubmit("The exam page was closed or refreshed")
+    const onWindowBlur = () => autoSubmit("The exam window lost focus")
+
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    document.addEventListener("fullscreenchange", onFullscreenChange)
+    window.addEventListener("pagehide", onPageHide)
+    window.addEventListener("beforeunload", onBeforeUnload)
+    window.addEventListener("blur", onWindowBlur)
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+      document.removeEventListener("fullscreenchange", onFullscreenChange)
+      window.removeEventListener("pagehide", onPageHide)
+      window.removeEventListener("beforeunload", onBeforeUnload)
+      window.removeEventListener("blur", onWindowBlur)
+    }
+  }, [isExamScreen, proctorOn])
+
+  useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    if (!exam || !["paper1", "paper2"].includes(screen)) return
-    sessionStorage.setItem(
-      answerKey,
-      JSON.stringify({ answers, candidateNumber, shuffleSeed }),
+    const phoneQuery = window.matchMedia("(max-width: 720px)")
+    const isPhoneDevice = /Mobi|Android.*Mobile|iPhone|iPod|Windows Phone/i.test(
+      navigator.userAgent,
     )
-  }, [answerKey, answers, candidateNumber, exam, screen, shuffleSeed])
+    const update = () => setIsMobilePhone(phoneQuery.matches || isPhoneDevice)
+    update()
+    phoneQuery.addEventListener("change", update)
+    return () => phoneQuery.removeEventListener("change", update)
+  }, [])
+  useEffect(() => {
+    if (!exam || !["paper1", "paper2", "upload"].includes(screen)) return
+    try {
+      sessionStorage.setItem(
+        answerKey,
+        JSON.stringify({ answers, photoAnswers, candidateNumber, shuffleSeed }),
+      )
+    } catch {
+      sessionStorage.setItem(
+        answerKey,
+        JSON.stringify({ answers, candidateNumber, shuffleSeed }),
+      )
+    }
+  }, [answerKey, answers, photoAnswers, candidateNumber, exam, screen, shuffleSeed])
   useEffect(() => {
     if (!exam || !["paper1", "paper2"].includes(screen)) return
     if (!deadlineAt.current) return
@@ -234,6 +402,18 @@ export default function StudentExam({ examId }: { examId: string }) {
     return () => window.clearInterval(timer)
   }, [exam?.id, screen])
 
+  useEffect(() => {
+    if (screen !== "upload" || !photoUploadDeadlineAt.current) return
+    const tick = () => {
+      const seconds = Math.max(0, Math.ceil((photoUploadDeadlineAt.current - Date.now()) / 1000))
+      setUploadSeconds(seconds)
+      if (seconds === 0 && !photoBusyQuestion) formRef.current?.requestSubmit()
+    }
+    tick()
+    const timer = window.setInterval(tick, 1000)
+    return () => window.clearInterval(timer)
+  }, [screen, photoBusyQuestion])
+
   const countdown = useMemo(
     () =>
       exam?.startTime
@@ -244,20 +424,15 @@ export default function StudentExam({ examId }: { examId: string }) {
 
   async function enter(event?: FormEvent) {
     event?.preventDefault()
+    proctor.enableAlertAudio()
     setBusy(true)
     setError("")
     try {
-      const response = await fetch(`/api/student/exams/${examId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "enter",
-          accessCode: accessCode.trim(),
-          candidateName,
-          candidateNumber,
-        }),
+      const { response, body } = await verifyStudentAccess(examId, {
+        accessCode: accessCode.trim(),
+        candidateName,
+        candidateNumber,
       })
-      const body = await response.json()
       if (body.gate === "early") {
         setGate("early")
         if (body.startTime)
@@ -280,6 +455,7 @@ export default function StudentExam({ examId }: { examId: string }) {
       const savedAttempt = saved
         ? JSON.parse(saved) as {
             answers?: Record<string, string>
+            photoAnswers?: Record<string, string>
             candidateNumber?: string
             shuffleSeed?: string
           }
@@ -290,7 +466,14 @@ export default function StudentExam({ examId }: { examId: string }) {
           ? savedAttempt.answers || {}
           : {},
       )
+      setPhotoAnswers(
+        savedAttempt?.candidateNumber === candidateNumber && !savedAttempt.shuffleSeed
+          ? savedAttempt.photoAnswers || {}
+          : {},
+      )
       setWarnings(0)
+      autoSubmitTriggeredRef.current = false
+      setAutoSubmitReason("")
       proctor.reset()
       setProctorOn(false)
       setScreen("preflight")
@@ -305,6 +488,7 @@ export default function StudentExam({ examId }: { examId: string }) {
   }
 
   async function beginExam() {
+    proctor.enableAlertAudio()
     if (!proctor.ready) {
       setError(
         "Complete the camera check before starting. If the camera cannot detect you, ask the invigilator for help.",
@@ -314,24 +498,21 @@ export default function StudentExam({ examId }: { examId: string }) {
     setBusy(true)
     setError("")
     try {
-      const response = await fetch(`/api/student/exams/${examId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "enter",
-          accessCode: accessCode.trim(),
-          candidateName,
-          candidateNumber,
-        }),
-      })
-      const body = await response.json()
+      await enterExamFullscreen()
+      const { response, body } = await verifyStudentAccess(examId, {
+        accessCode: accessCode.trim(),
+        candidateName,
+        candidateNumber,
+      }, "start")
       if (body.gate === "early") {
+        exitExamFullscreen()
         setGate("early")
         if (body.startTime)
           setExam((current) => current || createExamPreview(examId, body))
         return
       }
       if (body.gate === "closed") {
+        exitExamFullscreen()
         setGate("closed")
         setScreen("gate")
         setError("This examination has closed. Contact your invigilator.")
@@ -339,21 +520,25 @@ export default function StudentExam({ examId }: { examId: string }) {
       }
       if (!response.ok)
         throw new Error(body.error || "Unable to start this exam.")
+      if (!document.fullscreenElement)
+        throw new Error("Stay in fullscreen mode to start the exam. Press Start exam again.")
       setExam(body.exam)
       setGate("")
       setShuffleSeed(body.shuffleSeed)
       setReshuffleCount(body.reshuffleCount || 0)
       setWarnings(0)
+      autoSubmitTriggeredRef.current = false
+      setAutoSubmitReason("")
       proctor.reset()
       setProctorOn(true)
       const allotted = Number(body.exam.durationMinutes || 60) * 60
       setRemaining(allotted)
-      deadlineAt.current = Math.min(
-        Date.now() + allotted * 1000,
-        Date.parse(body.exam.endTime),
-      )
+      deadlineAt.current = body.deadlineAt
+        ? Date.parse(body.deadlineAt)
+        : Math.min(Date.now() + allotted * 1000, Date.parse(body.exam.endTime))
       setScreen("paper1")
     } catch (cause) {
+      exitExamFullscreen()
       setError(
         cause instanceof Error ? cause.message : "Unable to start this exam.",
       )
@@ -362,9 +547,52 @@ export default function StudentExam({ examId }: { examId: string }) {
     }
   }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    if (!exam || busy || screen === "submitted") return
+  async function submit(
+    event?: FormEvent,
+    automatic = false,
+    automaticReason = "",
+  ) {
+    event?.preventDefault()
+    if (!exam || (busy && !automatic) || screen === "submitted") return
+    if (automatic) {
+      setAutoSubmitReason(automaticReason)
+      setError("")
+    } else {
+      setAutoSubmitReason("")
+    }
+    if (
+      !automatic &&
+      screen !== "upload" &&
+      (exam.photoUploadWindowMinutes || 0) > 0 &&
+      exam.questions.paper2.some((question) => question.allowPhotoUpload)
+    ) {
+      setBusy(true)
+      setError("")
+      try {
+        const response = await fetch(`/api/student/exams/${examId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "open-photo-upload",
+            accessCode,
+            candidateName,
+            candidateNumber,
+          }),
+        })
+        const body = await response.json()
+        if (!response.ok) throw new Error(body.error || "Could not open the photo upload window.")
+        if (autoSubmitTriggeredRef.current) return
+        photoUploadDeadlineAt.current = Date.parse(body.closesAt)
+        setUploadSeconds(Math.max(0, Math.ceil((photoUploadDeadlineAt.current - Date.now()) / 1000)))
+        setProctorOn(false)
+        setScreen("upload")
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not open the photo upload window.")
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
     setBusy(true)
     setError("")
     setProctorOn(false)
@@ -372,12 +600,14 @@ export default function StudentExam({ examId }: { examId: string }) {
       const response = await fetch(`/api/student/exams/${examId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        keepalive: automatic,
         body: JSON.stringify({
           action: "submit",
           accessCode,
           candidateName,
           candidateNumber,
           answers,
+          photoAnswers,
           warnings: proctor.warningCount + warnings,
           reshuffleCount,
           shuffleSeed,
@@ -390,7 +620,13 @@ export default function StudentExam({ examId }: { examId: string }) {
       setPaper2Pending(body.paper2Pending)
       setScreen("submitted")
       sessionStorage.removeItem(answerKey)
+      exitExamFullscreen()
     } catch (cause) {
+      if (automatic) {
+        autoSubmitTriggeredRef.current = false
+        setAutoSubmitReason("")
+        setProctorOn(true)
+      }
       setError(
         cause instanceof Error
           ? cause.message
@@ -399,6 +635,10 @@ export default function StudentExam({ examId }: { examId: string }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  autoSubmitRef.current = (reason) => {
+    void submit(undefined, true, reason)
   }
 
   const setAnswer = (id: string, value: string) =>
@@ -411,7 +651,11 @@ export default function StudentExam({ examId }: { examId: string }) {
           <span className="result-check">✓</span>
           <span className="eyebrow">SUBMISSION RECEIVED</span>
           <h1>Exam submitted</h1>
-          <p>Your responses have been saved. You may now close this page.</p>
+          <p>
+            {autoSubmitReason
+              ? `Your exam was automatically submitted because ${autoSubmitReason.toLowerCase()}. Your teacher will review the result.`
+              : "Your responses have been saved. AI marking is provisional and your teacher will review the result."}
+          </p>
           <div className="result-score">
             <div>
               <small>PAPER 1 · OBJECTIVE</small>
@@ -430,6 +674,27 @@ export default function StudentExam({ examId }: { examId: string }) {
               </div>
             )}
           </div>
+          {attempt && (
+            <div className="result-grade">
+              <small>OVERALL GRADE</small>
+              <strong>
+                {percentageGrade(
+                  (attempt.objectiveScore || 0) +
+                    (attempt.theoryMax !== undefined
+                      ? attempt.theoryScore || 0
+                      : 0),
+                  (attempt.objectiveMax || 0) +
+                    (attempt.theoryMax !== undefined ? attempt.theoryMax : 0),
+                  exam?.gradeBands || [],
+                ) || "—"}
+              </strong>
+              <span>
+                {attempt.theoryMax === undefined && exam?.questions.paper2.length
+                  ? "Pending theory marking"
+                  : "Based on your total percentage"}
+              </span>
+            </div>
+          )}
           {paper2Pending && (
             <div className="pending-banner">
               Theory responses are saved and waiting for AI grading. Your
@@ -447,7 +712,12 @@ export default function StudentExam({ examId }: { examId: string }) {
     return (
       <main className="student-page">
         <section className="student-gate locked-gate">
-          <span className="lock-mark">⌑</span>
+          <span className="lock-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5" y="10" width="14" height="11" rx="2" />
+              <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" />
+            </svg>
+          </span>
           <span className="eyebrow danger-text">ANTI-CHEAT SESSION LOCKED</span>
           <h1>Session locked</h1>
           <p>
@@ -502,11 +772,15 @@ export default function StudentExam({ examId }: { examId: string }) {
             ? "No face detected. Move into the frame."
             : proctor.faceCount > 1
               ? "More than one face detected. Make sure only you are visible."
+              : proctor.identityMatch === false
+                ? "A different face was detected. Return to the face checked before the exam."
               : !proctor.centered
                 ? "Move your face to the center of the frame."
                 : proctor.lookingAway
                   ? "Face found. Look at the screen and center yourself."
-                  : "Camera check passed — you are ready."
+                  : !proctor.identityReady
+                    ? "Hold still while we register your starting face."
+                    : "Camera check passed — you are ready."
     const cameraStatusClass = proctor.error
       ? "preflight-status is-error"
       : proctor.ready
@@ -575,6 +849,10 @@ export default function StudentExam({ examId }: { examId: string }) {
                 </li>
                 <li>
                   Make sure only you are visible; keep your face uncovered.
+                </li>
+                <li>
+                  The face checked here is compared during the exam. Another
+                  face triggers a beep and a camera warning.
                 </li>
                 <li>
                   Keep your attention on the screen and avoid leaving the camera
@@ -662,7 +940,12 @@ export default function StudentExam({ examId }: { examId: string }) {
       <main className="student-page">
         <section className="student-gate">
           <Brand />
-          <span className="student-gate-icon">⌑</span>
+          <span className="student-gate-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5" y="10" width="14" height="11" rx="2" />
+              <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" />
+            </svg>
+          </span>
           <span className="eyebrow">CANDIDATE EXAM ACCESS</span>
           <h1>Ready to begin?</h1>
           <p>
@@ -741,7 +1024,7 @@ export default function StudentExam({ examId }: { examId: string }) {
             </button>
           </form>
           <div className="privacy-note">
-            ⌑ After access is verified, you’ll complete a local camera check
+            After access is verified, you’ll complete a local camera check
             before the exam. Camera frames stay on this device.
           </div>
         </section>
@@ -759,12 +1042,123 @@ export default function StudentExam({ examId }: { examId: string }) {
       </main>
     )
 
+  if (screen === "upload") {
+    const photoQuestions = exam.questions.paper2.filter((question) => question.allowPhotoUpload)
+    return (
+      <main className="student-page student-upload-page">
+        <section className="student-upload-card">
+          <span className="eyebrow">HANDWRITTEN ANSWER UPLOAD</span>
+          <h1>Photograph your written work</h1>
+          <p>
+            Your timed writing period is over. Camera checks are paused while you photograph and upload the approved answers. Submit before the upload timer ends.
+          </p>
+          <div className="upload-countdown">
+            <span>UPLOAD WINDOW REMAINING</span>
+            <strong>{formatClock(uploadSeconds)}</strong>
+          </div>
+          <form ref={formRef} onSubmit={submit} className="photo-upload-list">
+            {photoQuestions.map((question, index) => (
+              <article className="photo-upload-question" key={question.id}>
+                <div>
+                  <span className="eyebrow">QUESTION {index + 1} · {question.marks} MARKS</span>
+                  <h2>{question.prompt}</h2>
+                </div>
+                {photoAnswers[question.id] ? (
+                  <div className="photo-preview-wrap">
+                    <img src={photoAnswers[question.id]} alt={`Handwritten answer for question ${index + 1}`} />
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={uploadSeconds <= 0 || busy}
+                      onClick={() => setPhotoAnswers((current) => {
+                        const next = { ...current }
+                        delete next[question.id]
+                        return next
+                      })}
+                    >
+                      Remove photo
+                    </button>
+                  </div>
+                ) : (
+                  <label className="photo-picker">
+                    <strong>{photoBusyQuestion === question.id ? "Preparing photo…" : "Take or choose a photo"}</strong>
+                    <small>Keep the whole page in focus and make sure your writing is readable.</small>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      disabled={uploadSeconds <= 0 || busy || Boolean(photoBusyQuestion)}
+                      onChange={async (event) => {
+                        const file = event.currentTarget.files?.[0]
+                        event.currentTarget.value = ""
+                        if (!file) return
+                        setPhotoBusyQuestion(question.id)
+                        setError("")
+                        try {
+                          const image = await compressHandwrittenPhoto(file)
+                          setPhotoAnswers((current) => ({ ...current, [question.id]: image }))
+                        } catch (cause) {
+                          setError(cause instanceof Error ? cause.message : "Could not prepare that image.")
+                        } finally {
+                          setPhotoBusyQuestion("")
+                        }
+                      }}
+                    />
+                  </label>
+                )}
+              </article>
+            ))}
+            <div className="upload-camera-note">Camera supervision is paused only for this upload window. Your typed answers remain saved.</div>
+            {error && <div className="inline-error" role="alert">{error}</div>}
+            <button className="primary-button wide" type="submit" disabled={busy || Boolean(photoBusyQuestion)}>
+              {busy ? "Submitting and marking…" : "Submit answers for AI marking"}
+            </button>
+          </form>
+        </section>
+      </main>
+    )
+  }
+
   const questions =
     screen === "paper2" ? exam.questions.paper2 : exam.questions.paper1
   return (
-    <main className="student-exam-shell">
+    <main
+      className="student-exam-shell"
+      data-mobile-phone={isMobilePhone ? "true" : undefined}
+    >
       <header className="student-exam-header">
         <Brand />
+        <div className="student-mobile-face-alert">
+          <span className="student-mobile-face-preview">
+            <video ref={proctor.headerVideoRef} autoPlay muted playsInline />
+            <i className={proctor.identityMatch === false || (proctor.faceCount || 0) > 1 ? "is-alert" : ""} />
+          </span>
+          <span className="student-mobile-face-label">
+            {proctor.identityMatch === false || (proctor.faceCount || 0) > 1
+              ? "Check face"
+              : "Face check"}
+          </span>
+          <span
+            className={
+              proctor.warning || proctor.warningCount > 0 || proctor.identityMatch === false || (proctor.faceCount || 0) > 1
+                ? "student-mobile-notification is-alert"
+                : "student-mobile-notification"
+            }
+            role="img"
+            aria-label={
+              proctor.warning || proctor.warningCount > 0 || proctor.identityMatch === false || (proctor.faceCount || 0) > 1
+                ? "Camera warning notification"
+                : "No camera warnings"
+            }
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+            </svg>
+            {(proctor.warningCount > 0 || proctor.identityMatch === false || (proctor.faceCount || 0) > 1) && (
+              <b>{proctor.warningCount || "!"}</b>
+            )}
+          </span>
+        </div>
         <div className="student-exam-subject">
           <strong>{exam.title}</strong>
           <small>{exam.subject} · WASSCE Standard</small>
@@ -774,9 +1168,7 @@ export default function StudentExam({ examId }: { examId: string }) {
           <strong>{formatClock(remaining)}</strong>
         </div>
         <span className="proctor-badge proctor-active">
-          {proctor.active
-            ? "◉ Local camera checks on"
-            : "◉ Starting camera checks"}
+          {proctor.active ? "Camera checks on" : "Starting camera checks"}
         </span>
       </header>
       <div className="student-progress">
@@ -796,22 +1188,6 @@ export default function StudentExam({ examId }: { examId: string }) {
       </div>
       <form ref={formRef} className="exam-workspace" onSubmit={submit}>
         <section className="question-area">
-          <div className="paper-tabs">
-            <button
-              type="button"
-              className={screen === "paper1" ? "paper-tab active" : "paper-tab"}
-              onClick={() => setScreen("paper1")}
-            >
-              Paper 1 <small>Objectives · {exam.questions.paper1.length}</small>
-            </button>
-            <button
-              type="button"
-              className={screen === "paper2" ? "paper-tab active" : "paper-tab"}
-              onClick={() => setScreen("paper2")}
-            >
-              Paper 2 <small>Theory · {exam.questions.paper2.length}</small>
-            </button>
-          </div>
           <div className="question-list">
             {screen === "paper1"
               ? (questions as ObjectiveQuestion[]).map((question, index) => (
@@ -823,7 +1199,7 @@ export default function StudentExam({ examId }: { examId: string }) {
                     <span className="question-count">
                       QUESTION {index + 1} <i>{question.marks || 1} mark</i>
                     </span>
-                    <h2>{question.stem}</h2>
+                    <h2><ExamText text={question.stem} /></h2>
                     <div className="student-options">
                       {question.options.map((option) => (
                         <label
@@ -842,7 +1218,7 @@ export default function StudentExam({ examId }: { examId: string }) {
                             onChange={() => setAnswer(question.id, option.id)}
                           />
                           <b>{option.label}</b>
-                          <span>{option.text}</span>
+                          <span><ExamText text={option.text} /></span>
                           {answers[question.id] === option.id && <i>✓</i>}
                         </label>
                       ))}
@@ -871,9 +1247,24 @@ export default function StudentExam({ examId }: { examId: string }) {
             <span>
               <i /> Answers are saved as you work in this session
             </span>
-            <button type="submit" className="primary-button" disabled={busy}>
-              {busy ? "Submitting…" : "Submit examination →"}
-            </button>
+            {screen === "paper1" ? (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={busy}
+                onClick={() => {
+                  setError("")
+                  setScreen("paper2")
+                  window.scrollTo(0, 0)
+                }}
+              >
+                Paper 2 · Continue →
+              </button>
+            ) : (
+              <button type="submit" className="primary-button" disabled={busy}>
+                {busy ? "Submitting…" : "Submit examination →"}
+              </button>
+            )}
           </footer>
           {error && <div className="inline-error">{error}</div>}
         </section>
@@ -943,6 +1334,8 @@ export default function StudentExam({ examId }: { examId: string }) {
                       ? "No face detected"
                       : proctor.faceCount !== null && proctor.faceCount > 1
                         ? "More than one face"
+                        : proctor.identityMatch === false
+                          ? "Different face detected"
                         : proctor.faceCount === 1 && !proctor.centered
                           ? "Center your face in frame"
                           : proctor.active
