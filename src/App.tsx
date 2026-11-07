@@ -969,6 +969,8 @@ function ExamsPage({
 
 function ResultsPage({ exams }: { exams: PortalExam[] }) {
   const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set())
+  const [gradingIds, setGradingIds] = useState<Set<string>>(new Set())
+  const [gradingErrors, setGradingErrors] = useState<Record<string, string>>({})
   const attempts = exams
     .flatMap((exam) =>
       exam.attempts.map((attempt) => ({
@@ -979,6 +981,38 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
       })),
     )
     .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))
+
+  async function retryTheoryGrade(examId: string, attemptId: string) {
+    setGradingIds((current) => new Set(current).add(attemptId))
+    setGradingErrors((current) => {
+      const next = { ...current }
+      delete next[attemptId]
+      return next
+    })
+    try {
+      const response = await fetch(
+        `/api/exams/${examId}/attempts/${attemptId}/grade`,
+        { method: "POST" },
+      )
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || "Could not grade this submission.")
+      window.location.reload()
+    } catch (error) {
+      setGradingErrors((current) => ({
+        ...current,
+        [attemptId]:
+          error instanceof Error
+            ? error.message
+            : "Could not grade this submission.",
+      }))
+    } finally {
+      setGradingIds((current) => {
+        const next = new Set(current)
+        next.delete(attemptId)
+        return next
+      })
+    }
+  }
   return (
     <>
       <div className="page-heading compact">
@@ -1028,7 +1062,26 @@ function ResultsPage({ exams }: { exams: PortalExam[] }) {
                     </td>
                     <td>
                       {attempt.theoryScore === undefined ? (
-                        <span className="pending">Pending AI grade</span>
+                        <div className="pending-grade">
+                          <span className="pending">Pending AI grade</span>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            disabled={gradingIds.has(attempt.id)}
+                            onClick={() =>
+                              void retryTheoryGrade(attempt.examId, attempt.id)
+                            }
+                          >
+                            {gradingIds.has(attempt.id)
+                              ? "Grading…"
+                              : "Retry grading"}
+                          </button>
+                          {gradingErrors[attempt.id] && (
+                            <small className="grading-error" role="alert">
+                              {gradingErrors[attempt.id]}
+                            </small>
+                          )}
+                        </div>
                       ) : (
                         <strong>
                           {attempt.theoryScore}/{attempt.theoryMax}
