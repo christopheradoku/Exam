@@ -17,6 +17,12 @@ export type StudentClass = {
   createdAt: string
 }
 
+export type StudentAggregate = {
+  total: number
+  subjects: Array<{ subject: string; grade: string; points: number }>
+  complete: boolean
+}
+
 export type StudentExamAssignment = {
   id: string
   title: string

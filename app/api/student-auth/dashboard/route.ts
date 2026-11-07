@@ -3,7 +3,7 @@ import { getStudentForRequest } from "../../../../server/studentAuth"
 import { listExams } from "../../../../server/examStore"
 import type { ExamAttempt, PortalExam } from "../../../../src/lib/portalTypes"
 import { defaultGradeBands } from "../../../../src/lib/portalTypes"
-import type { StudentExamAssignment } from "../../../../src/lib/studentTypes"
+import type { StudentAggregate, StudentExamAssignment } from "../../../../src/lib/studentTypes"
 
 function belongsToStudent(attempt: ExamAttempt, studentId: string, studentNumber: string, waecCandidateNumber?: string) {
   return attempt.studentId === studentId ||
@@ -21,6 +21,58 @@ function getAttemptGrade(exam: PortalExam, attempt: ExamAttempt) {
   return (exam.gradeBands || defaultGradeBands).find(
     (band) => percentage >= band.minimum && percentage <= band.maximum,
   )?.label
+}
+
+function aggregatePoints(percentage: number) {
+  if (percentage >= 90) return 1
+  if (percentage >= 80) return 2
+  if (percentage >= 70) return 3
+  if (percentage >= 60) return 4
+  if (percentage >= 55) return 5
+  if (percentage >= 50) return 6
+  if (percentage >= 40) return 7
+  if (percentage >= 30) return 8
+  return 9
+}
+
+function isCoreSubject(subject: string, core: "english" | "mathematics") {
+  const normalized = subject.toLowerCase().replace(/[^a-z]/g, "")
+  return core === "english"
+    ? normalized.includes("english")
+    : normalized.includes("mathematics") || normalized === "math" || normalized.includes("mathematics")
+}
+
+function getStudentAggregate(
+  exams: Array<PortalExam & { assignment: StudentExamAssignment }>,
+): StudentAggregate | undefined {
+  const results = exams.flatMap(({ subject, assignment }) => {
+    const attempt = assignment.attempt
+    if (!attempt || assignment.paper2Pending) return []
+    const maximum = attempt.objectiveMax + (attempt.theoryMax || 0)
+    if (!maximum) return []
+    const score = attempt.objectiveScore + (attempt.theoryScore || 0)
+    const percentage = (score / maximum) * 100
+    return [{ subject, grade: attempt.grade || "—", points: aggregatePoints(percentage) }]
+  })
+  const uniqueResults = new Map<string, (typeof results)[number]>()
+  for (const result of results) {
+    const key = result.subject.trim().toLowerCase()
+    const existing = uniqueResults.get(key)
+    if (!existing || result.points < existing.points) uniqueResults.set(key, result)
+  }
+  const subjects = [...uniqueResults.values()]
+  const selected: typeof subjects = []
+  for (const core of ["english", "mathematics"] as const) {
+    const index = subjects.findIndex((result) => isCoreSubject(result.subject, core))
+    if (index >= 0) selected.push(subjects.splice(index, 1)[0])
+  }
+  selected.push(...subjects.sort((left, right) => left.points - right.points).slice(0, 6 - selected.length))
+  if (!selected.length) return undefined
+  return {
+    total: selected.reduce((total, result) => total + result.points, 0),
+    subjects: selected,
+    complete: selected.length >= 6,
+  }
 }
 
 function examAssignment(
@@ -104,7 +156,8 @@ export async function GET(request: NextRequest) {
       exam.assignedClassIds?.includes(student.classId) ||
       exam.attempts.some((attempt) => belongsToStudent(attempt, student.id, student.studentNumber, student.waecCandidateNumber)),
     )
-    .map((exam) => examAssignment(exam, student))
+    .map((exam) => ({ ...examAssignment(exam, student), sourceExam: exam }))
     .sort((left, right) => Date.parse(left.startTime) - Date.parse(right.startTime))
-  return NextResponse.json({ student, exams }, { headers: { "Cache-Control": "private, no-store" } })
+  const aggregate = getStudentAggregate(exams.map(({ sourceExam, ...assignment }) => ({ ...sourceExam, assignment })))
+  return NextResponse.json({ student, exams: exams.map(({ sourceExam, ...assignment }) => assignment), aggregate }, { headers: { "Cache-Control": "private, no-store" } })
 }

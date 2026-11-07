@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { FormEvent } from "react"
-import type { StudentClass, StudentExamAssignment, StudentProfile } from "./lib/studentTypes"
+import type { StudentAggregate, StudentClass, StudentExamAssignment, StudentProfile } from "./lib/studentTypes"
 
-type Dashboard = { student: StudentProfile; exams: StudentExamAssignment[] }
+type Dashboard = { student: StudentProfile; exams: StudentExamAssignment[]; aggregate?: StudentAggregate }
 type PortalMode = "login" | "register"
 type DashboardView = "exams" | "history"
 
@@ -265,7 +265,7 @@ export default function StudentPortal() {
     )
   }
 
-  const { student, exams } = dashboard
+  const { student, exams, aggregate } = dashboard
   const needsPasswordChange = student.mustChangePassword
   const readyCount = exams.filter((exam) => exam.status === "ready").length
   const upcomingCount = exams.filter((exam) => exam.status === "upcoming").length
@@ -303,6 +303,20 @@ export default function StudentPortal() {
               <div><span className="eyebrow">YOUR EXAM SCHEDULE</span><h1>Welcome, {student.fullName.split(/\s+/)[0]}</h1><p>Exams assigned to you and results from your previous attempts.</p></div>
             </div>
             {notice && <div className="student-notice" role="status">{notice}</div>}
+            {aggregate && (
+              <section className="student-aggregate-panel" aria-labelledby="student-aggregate-title">
+                <div>
+                  <span className="eyebrow">BECE-STYLE AGGREGATE</span>
+                  <h2 id="student-aggregate-title">Aggregate {aggregate.total}</h2>
+                  <p>{aggregate.complete ? "Best six subject results, including English and Mathematics where available." : "Your aggregate will update as more subject results are completed."}</p>
+                </div>
+                <div className="student-aggregate-subjects">
+                  {aggregate.subjects.map((subject) => (
+                    <span key={subject.subject}><strong>{subject.subject}</strong><small>Grade {subject.grade} · {subject.points} point{subject.points === 1 ? "" : "s"}</small></span>
+                  ))}
+                </div>
+              </section>
+            )}
             {recentResults.length > 0 && (
               <section className="student-results-panel" aria-labelledby="student-results-title">
                 <div className="student-results-heading">
