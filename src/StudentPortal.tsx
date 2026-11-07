@@ -37,6 +37,11 @@ function formatDate(value: string) {
   })
 }
 
+function resultPercentage(score: number, maximum: number) {
+  if (maximum <= 0) return 0
+  return Math.round((score / maximum) * 100)
+}
+
 export default function StudentPortal() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [checkingSession, setCheckingSession] = useState(true)
@@ -265,6 +270,13 @@ export default function StudentPortal() {
   const readyCount = exams.filter((exam) => exam.status === "ready").length
   const upcomingCount = exams.filter((exam) => exam.status === "upcoming").length
   const resultCount = exams.reduce((total, exam) => total + exam.attemptsUsed, 0)
+  const recentResults = [...historyExams]
+    .filter((exam) => exam.attempt)
+    .sort((left, right) =>
+      Date.parse(right.attempt?.submittedAt || "") -
+      Date.parse(left.attempt?.submittedAt || ""),
+    )
+    .slice(0, 3)
 
   return (
     <main className="student-portal-page">
@@ -291,6 +303,54 @@ export default function StudentPortal() {
               <div><span className="eyebrow">YOUR EXAM SCHEDULE</span><h1>Welcome, {student.fullName.split(/\s+/)[0]}</h1><p>Exams assigned to you and results from your previous attempts.</p></div>
             </div>
             {notice && <div className="student-notice" role="status">{notice}</div>}
+            {recentResults.length > 0 && (
+              <section className="student-results-panel" aria-labelledby="student-results-title">
+                <div className="student-results-heading">
+                  <div>
+                    <span className="eyebrow">YOUR PERFORMANCE</span>
+                    <h2 id="student-results-title">Recent results</h2>
+                    <p>Your submitted exam results are available here.</p>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    onClick={() => setView("history")}
+                  >
+                    View all results
+                  </button>
+                </div>
+                <div className="student-result-cards">
+                  {recentResults.map((exam) => (
+                    <article key={exam.id} className="student-result-card">
+                      <div>
+                        <strong>{exam.title}</strong>
+                        <small>{exam.subject} · {formatDate(exam.attempt!.submittedAt)}</small>
+                      </div>
+                      <div className="student-result-card-score">
+                        <strong>
+                          {exam.attempt!.objectiveScore + (exam.attempt!.theoryScore || 0)} /{" "}
+                          {exam.attempt!.objectiveMax + (exam.attempt!.theoryMax || 0)}
+                        </strong>
+                        <span className="student-result-percentage">
+                          {resultPercentage(
+                            exam.attempt!.objectiveScore + (exam.attempt!.theoryScore || 0),
+                            exam.attempt!.objectiveMax + (exam.attempt!.theoryMax || 0),
+                          )}%
+                        </span>
+                        {exam.attempt!.grade ? (
+                          <span className={`student-grade grade-${gradeTone(exam.attempt!.grade)}`}>
+                            Grade {exam.attempt!.grade}
+                          </span>
+                        ) : (
+                          <span className="student-result-pending">
+                            Marking pending
+                          </span>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
             <section className="student-summary-grid">
               <article><small>Ready now</small><strong>{readyCount}</strong><span>Assigned exams you can start</span></article>
               <article><small>Upcoming</small><strong>{upcomingCount}</strong><span>Scheduled for a later time</span></article>
@@ -306,8 +366,8 @@ export default function StudentPortal() {
                     return (
                       <article className="student-exam-card" key={exam.id}>
                         <div className="student-exam-card-main"><span className={`student-exam-status status-${exam.status}`}>{statusLabel}</span><h3>{exam.title}</h3><p>{exam.subject} · {exam.durationMinutes} minutes</p><small>{exam.status === "expired" ? `Closed ${formatDate(exam.endTime)}` : `Starts ${formatDate(exam.startTime)}`}</small>
-                          {hasResult && exam.attempt && <div className="student-result-summary"><span>Latest score <strong>{exam.attempt.objectiveScore + (exam.attempt.theoryScore || 0)} / {exam.attempt.objectiveMax + (exam.attempt.theoryMax || 0)}</strong></span>{exam.attempt.grade && <span className={`student-grade grade-${gradeTone(exam.attempt.grade)}`}>Grade {exam.attempt.grade}</span>}<span>Attempt <strong>{exam.attemptsUsed} of {exam.maxAttempts}</strong></span>{exam.attemptsRemaining > 0 ? <small>{exam.attemptsRemaining} {exam.attemptsRemaining === 1 ? "attempt" : "attempts"} {exam.canRetry ? "remaining; retry before the exam closes." : "remain, but are currently unavailable."}</small> : <small>No attempts remain for this exam.</small>}{exam.paper2Pending && <small>Paper 2 is still being marked; this result can change.</small>}{exam.attempt.grade && !exam.paper2Pending && <small>{gradeAdvice(exam.attempt.grade)}</small>}{exam.attempt.teacherReviewed && <small>Teacher review complete</small>}
-                            {exam.attemptHistory.length > 0 && <div className="student-attempt-history"><strong>Submitted attempts</strong>{exam.attemptHistory.map((result, index) => <div className="student-attempt-row" key={result.id}><span>Attempt {index + 1} · {formatDate(result.submittedAt)}</span><span>{result.objectiveScore + (result.theoryScore || 0)} / {result.objectiveMax + (result.theoryMax || 0)}{result.grade ? ` · Grade ${result.grade}` : result.status === "submitted" ? " · Marking pending" : ""}</span>{result.teacherReviewed && <small>Teacher reviewed</small>}</div>)}</div>}
+                          {hasResult && exam.attempt && <div className="student-result-summary"><span>Latest score <strong>{exam.attempt.objectiveScore + (exam.attempt.theoryScore || 0)} / {exam.attempt.objectiveMax + (exam.attempt.theoryMax || 0)}</strong></span><span className="student-result-percentage">{resultPercentage(exam.attempt.objectiveScore + (exam.attempt.theoryScore || 0), exam.attempt.objectiveMax + (exam.attempt.theoryMax || 0))}%</span>{exam.attempt.grade && <span className={`student-grade grade-${gradeTone(exam.attempt.grade)}`}>Grade {exam.attempt.grade}</span>}<span>Attempt <strong>{exam.attemptsUsed} of {exam.maxAttempts}</strong></span>{exam.attemptsRemaining > 0 ? <small>{exam.attemptsRemaining} {exam.attemptsRemaining === 1 ? "attempt" : "attempts"} {exam.canRetry ? "remaining; retry before the exam closes." : "remain, but are currently unavailable."}</small> : <small>No attempts remain for this exam.</small>}{exam.paper2Pending && <small>Paper 2 is still being marked; this result can change.</small>}{exam.attempt.grade && !exam.paper2Pending && <small>{gradeAdvice(exam.attempt.grade)}</small>}{exam.attempt.teacherReviewed && <small>Teacher review complete</small>}
+                            {exam.attemptHistory.length > 0 && <div className="student-attempt-history"><strong>Submitted attempts</strong>{exam.attemptHistory.map((result, index) => <div className="student-attempt-row" key={result.id}><span>Attempt {index + 1} · {formatDate(result.submittedAt)}</span><span>{result.objectiveScore + (result.theoryScore || 0)} / {result.objectiveMax + (result.theoryMax || 0)} · {resultPercentage(result.objectiveScore + (result.theoryScore || 0), result.objectiveMax + (result.theoryMax || 0))}%{result.grade ? ` · Grade ${result.grade}` : result.status === "submitted" ? " · Marking pending" : ""}</span>{result.teacherReviewed && <small>Teacher reviewed</small>}</div>)}</div>}
                           </div>}
                         </div>
                         <div className="student-exam-card-action">
