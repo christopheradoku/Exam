@@ -53,7 +53,15 @@ export type PortalExam = {
   assignedClassIds?: string[]
   photoUploadWindowMinutes?: number
   photoUploadWindows?: Record<string, { openedAt: string; closesAt: string }>
-  candidateStartTimes?: Record<string, { startedAt: string; deadlineAt: string }>
+  candidateStartTimes?: Record<string, {
+    startedAt: string
+    deadlineAt: string
+    candidateName?: string
+    candidateNumber?: string
+    answeredCount?: number
+    totalQuestionCount?: number
+    lastSeenAt?: string
+  }>
   questions: { paper1: ObjectiveQuestion[]; paper2: TheoryPart[] }
   attempts: ExamAttempt[]
   createdAt: string

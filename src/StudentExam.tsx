@@ -419,6 +419,22 @@ export default function StudentExam({ examId }: { examId: string }) {
   }, [answerKey, answers, photoAnswers, candidateNumber, exam, screen])
   useEffect(() => {
     if (!exam || !["paper1", "paper2"].includes(screen)) return
+    const sendProgress = () => {
+      const totalQuestionCount = exam.questions.paper1.length + exam.questions.paper2.length
+      const answeredCount = [...exam.questions.paper1, ...exam.questions.paper2]
+        .filter((question) => answers[question.id]?.trim()).length
+      void fetch(`/api/student/exams/${exam.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "heartbeat", answeredCount, totalQuestionCount }),
+      }).catch(() => undefined)
+    }
+    sendProgress()
+    const timer = window.setInterval(sendProgress, 5000)
+    return () => window.clearInterval(timer)
+  }, [answers, exam, screen])
+  useEffect(() => {
+    if (!exam || !["paper1", "paper2"].includes(screen)) return
     if (!deadlineAt.current) return
     const tick = () => {
       const seconds = Math.max(

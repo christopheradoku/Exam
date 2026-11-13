@@ -11,12 +11,14 @@ import { defaultGradeBands } from "../../../../../src/lib/portalTypes"
 import type { TheoryPart } from "../../../../../src/lib/examTypes"
 
 type Body = {
-  action?: "enter" | "start" | "submit" | "open-photo-upload" | "answer-key"
+  action?: "enter" | "start" | "heartbeat" | "submit" | "open-photo-upload" | "answer-key"
   accessCode?: string
   candidateName?: string
   candidateNumber?: string
   answers?: Record<string, string>
   photoAnswers?: Record<string, string>
+  answeredCount?: number
+  totalQuestionCount?: number
 }
 
 function safeTheoryQuestion(question: TheoryPart): TheoryPart {
@@ -66,7 +68,7 @@ export async function POST(
       { error: "Invalid exam request." },
       { status: 400 },
     )
-  if (!body.action || !["enter", "start", "submit", "open-photo-upload", "answer-key"].includes(body.action))
+  if (!body.action || !["enter", "start", "heartbeat", "submit", "open-photo-upload", "answer-key"].includes(body.action))
     return NextResponse.json({ error: "Unsupported exam action." }, { status: 400 })
   const student = await getStudentForRequest(request)
   if (!student)
@@ -132,6 +134,26 @@ export async function POST(
     await saveExam(exam)
     return NextResponse.json(window)
   }
+  if (body.action === "heartbeat") {
+    exam.candidateStartTimes ||= {}
+    const start = exam.candidateStartTimes?.[student.id]
+    if (!start)
+      return NextResponse.json({ error: "The timed exam has not been started for this candidate." }, { status: 403 })
+    if (Date.now() > Date.parse(start.deadlineAt))
+      return NextResponse.json({ error: "The exam timer has ended." }, { status: 409 })
+    const answeredCount = Math.max(0, Math.floor(Number(body.answeredCount) || 0))
+    const totalQuestionCount = Math.max(answeredCount, Math.floor(Number(body.totalQuestionCount) || 0))
+    exam.candidateStartTimes[student.id] = {
+      ...start,
+      candidateName: student.fullName,
+      candidateNumber,
+      answeredCount: Math.min(answeredCount, totalQuestionCount),
+      totalQuestionCount,
+      lastSeenAt: new Date().toISOString(),
+    }
+    await saveExam(exam)
+    return NextResponse.json({ ok: true })
+  }
   const gate = timeGate(exam)
   if ((body.action === "enter" || body.action === "start") && gate === "early")
     return NextResponse.json(
@@ -180,7 +202,15 @@ export async function POST(
       if (!start) {
         const startedAt = Date.now()
         deadlineAt = new Date(Math.min(startedAt + exam.durationMinutes * 60_000, Date.parse(exam.endTime))).toISOString()
-        exam.candidateStartTimes[key] = { startedAt: new Date(startedAt).toISOString(), deadlineAt }
+        exam.candidateStartTimes[key] = {
+          startedAt: new Date(startedAt).toISOString(),
+          deadlineAt,
+          candidateName: student.fullName,
+          candidateNumber,
+          answeredCount: 0,
+          totalQuestionCount: exam.questions.paper1.length + exam.questions.paper2.length,
+          lastSeenAt: new Date().toISOString(),
+        }
         await saveExam(exam)
       } else {
         deadlineAt = start.deadlineAt

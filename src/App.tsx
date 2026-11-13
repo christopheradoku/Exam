@@ -224,7 +224,7 @@ export default function App() {
     if (!authenticated) return
     const timer = window.setInterval(() => {
       void loadExams().catch(() => {})
-    }, 15_000)
+    }, 5_000)
     return () => window.clearInterval(timer)
   }, [authenticated, loadExams])
 
@@ -712,6 +712,33 @@ function ExamTable({
                 <small>Attempts</small>
                 <span className="attempt-count">{exam.attempts.length}</span>
           </div>
+          {(() => {
+            const activeCandidates = Object.values(exam.candidateStartTimes || {}).filter(
+              (candidate) =>
+                Date.parse(candidate.deadlineAt) > Date.now() &&
+                (!candidate.lastSeenAt || Date.now() - Date.parse(candidate.lastSeenAt) < 30_000),
+            )
+            return activeCandidates.length ? (
+              <div className="exam-live-progress">
+                <div className="exam-live-progress-heading">
+                  <small>LIVE CANDIDATE PROGRESS</small>
+                  <strong>{activeCandidates.length} writing</strong>
+                </div>
+                {activeCandidates.map((candidate, index) => {
+                  const total = candidate.totalQuestionCount || 0
+                  const answered = Math.min(candidate.answeredCount || 0, total)
+                  const percentage = total ? Math.round((answered / total) * 100) : 0
+                  return (
+                    <div className="exam-live-candidate" key={`${candidate.candidateNumber || candidate.candidateName || "candidate"}-${index}`}>
+                      <div><span>{candidate.candidateName || "Candidate"}</span><strong>{percentage}%</strong></div>
+                      <div className="exam-live-track"><span style={{ width: `${percentage}%` }} /></div>
+                      <small>{answered} of {total} questions answered</small>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : null
+          })()}
           <div>
                 <div className="row-actions">
                   <button
